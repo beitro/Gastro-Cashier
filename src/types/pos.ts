@@ -143,3 +143,25 @@ export interface PrintTicket {
     paymentFlow?: PaymentFlowMode;
   };
 }
+
+export type UserRole = 'owner' | 'cashier' | 'finance';
+
+export interface StaffAccount {
+  id: string;
+  name: string;
+  role: UserRole;
+  pin: string;
+  nfcTagUid: string;
+  avatarColor: string;
+  roleLabel: string;
+}
+
+export interface PettyCashEntry {
+  id: string;
+  timestamp: string;
+  description: string;
+  category: 'operasional' | 'bahan_darurat' | 'utilitas' | 'lainnya';
+  amount: number;
+  receiptNumber?: string;
+  recordedBy: string;
+}

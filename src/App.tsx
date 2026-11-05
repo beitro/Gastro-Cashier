@@ -8,6 +8,8 @@ import {
   RawMaterial,
   CookingStatus,
   PaymentFlowMode,
+  StaffAccount,
+  PettyCashEntry,
 } from './types/pos';
 import { INITIAL_TABLES, MENU_ITEMS, RAW_MATERIALS } from './data/initialData';
 import {
@@ -19,9 +21,10 @@ import {
   countWaiterPickupItems,
   isItemWaitingForWaiter,
 } from './utils/posCalculations';
+import { DEFAULT_STAFF_ACCOUNTS } from './utils/authRoles';
 import { sounds } from './utils/soundEffects';
 
-import { Navbar } from './components/Navbar';
+import { Navbar, NavTabId } from './components/Navbar';
 import { FloorPlanGrid } from './components/FloorPlanGrid';
 import { OrderModal } from './components/OrderModal';
 import { PrinterModal } from './components/PrinterModal';
@@ -30,6 +33,10 @@ import { PaymentModal } from './components/PaymentModal';
 import { SalesSummaryModal } from './components/SalesSummaryModal';
 import { KDSModal } from './components/KDSModal';
 import { InventoryModal } from './components/InventoryModal';
+import { GoogleSheetsModal } from './components/GoogleSheetsModal';
+import { LoginModal } from './components/LoginModal';
+import { FinanceView } from './components/FinanceView';
+import { OwnerDashboardView } from './components/OwnerDashboardView';
 
 const STORAGE_KEY_TABLES = 'resto_pos_tables_v1';
 const STORAGE_KEY_TRANSACTIONS = 'resto_pos_tx_v1';
@@ -37,6 +44,8 @@ const STORAGE_KEY_SETTLED = 'resto_pos_settled_v1';
 const STORAGE_KEY_TICKETS = 'resto_pos_tickets_v1';
 const STORAGE_KEY_MATERIALS = 'resto_pos_materials_v1';
 const STORAGE_KEY_PAYMENT_MODE = 'resto_pos_payment_mode_v1';
+const STORAGE_KEY_STAFF = 'resto_pos_staff_v1';
+const STORAGE_KEY_PETTY_CASH = 'resto_pos_petty_cash_v1';
 
 // Seed sample active transactions for occupied tables
 const INITIAL_TRANSACTIONS: Record<string, Transaction> = {
@@ -456,8 +465,46 @@ export default function App() {
     return 'payment_last';
   });
 
+  // Staff Authentication & Role State
+  const [currentStaff, setCurrentStaff] = useState<StaffAccount | null>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_STAFF);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return DEFAULT_STAFF_ACCOUNTS[1]; // Budi Prasetyo (Kasir Utama)
+  });
+
+  const [isLocked, setIsLocked] = useState<boolean>(false);
+
+  const [pettyCashEntries, setPettyCashEntries] = useState<PettyCashEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_PETTY_CASH);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [
+      {
+        id: 'pc-init-1',
+        timestamp: new Date(Date.now() - 120 * 60000).toISOString(),
+        description: 'Isi Ulang Gas LPG 12kg Dapur',
+        category: 'operasional',
+        amount: 45000,
+        recordedBy: 'Ratna Dewi',
+        receiptNumber: 'B-8821',
+      },
+      {
+        id: 'pc-init-2',
+        timestamp: new Date(Date.now() - 60 * 60000).toISOString(),
+        description: 'Es Kristal Balok Tambahan Bar Station',
+        category: 'bahan_darurat',
+        amount: 25000,
+        recordedBy: 'Ratna Dewi',
+        receiptNumber: 'B-8839',
+      },
+    ];
+  });
+
   // UI Navigation & Modals
-  const [activeTab, setActiveTab] = useState<'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory'>('floor');
+  const [activeTab, setActiveTab] = useState<NavTabId>('floor');
   const [soundEnabled, setSoundEnabled] = useState(true);
 
   // Active modal targets
@@ -469,6 +516,49 @@ export default function App() {
   const [printerModalTickets, setPrinterModalTickets] = useState<PrintTicket[]>([]);
   const [showSalesModal, setShowSalesModal] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showSheetsModal, setShowSheetsModal] = useState(false);
+  const [sheetsModalMode, setSheetsModalMode] = useState<'create' | 'sales' | 'inventory'>('create');
+
+  const handleOpenGoogleSheets = (mode: 'create' | 'sales' | 'inventory' = 'create') => {
+    sounds.playTapSound();
+    setSheetsModalMode(mode);
+    setShowSheetsModal(true);
+  };
+
+  const handleLoginSuccess = (staff: StaffAccount) => {
+    setCurrentStaff(staff);
+    setIsLocked(false);
+    try {
+      localStorage.setItem(STORAGE_KEY_STAFF, JSON.stringify(staff));
+    } catch {}
+    // Automatically navigate to role-specific landing view
+    if (staff.role === 'owner') {
+      setActiveTab('owner');
+    } else if (staff.role === 'finance') {
+      setActiveTab('finance');
+    } else {
+      setActiveTab('floor');
+    }
+  };
+
+  const handleLockScreen = () => {
+    sounds.playTapSound();
+    setIsLocked(true);
+  };
+
+  const handleAddPettyCash = (entry: Omit<PettyCashEntry, 'id' | 'timestamp'>) => {
+    const newEntry: PettyCashEntry = {
+      ...entry,
+      id: `pc-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+      timestamp: new Date().toISOString(),
+    };
+    setPettyCashEntries((prev) => [newEntry, ...prev]);
+  };
+
+  const handleDeletePettyCash = (id: string) => {
+    sounds.playTapSound();
+    setPettyCashEntries((prev) => prev.filter((p) => p.id !== id));
+  };
 
   // Sync to LocalStorage
   useEffect(() => {
@@ -479,8 +569,10 @@ export default function App() {
       localStorage.setItem(STORAGE_KEY_TICKETS, JSON.stringify(allPrintTickets));
       localStorage.setItem(STORAGE_KEY_MATERIALS, JSON.stringify(rawMaterials));
       localStorage.setItem(STORAGE_KEY_PAYMENT_MODE, paymentFlowMode);
+      if (currentStaff) localStorage.setItem(STORAGE_KEY_STAFF, JSON.stringify(currentStaff));
+      localStorage.setItem(STORAGE_KEY_PETTY_CASH, JSON.stringify(pettyCashEntries));
     } catch {}
-  }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, paymentFlowMode]);
+  }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, paymentFlowMode, currentStaff, pettyCashEntries]);
 
   // RESET DEMO DATA
   const handleResetData = () => {
@@ -494,6 +586,26 @@ export default function App() {
     setAllPrintTickets([]);
     setRawMaterials(RAW_MATERIALS);
     setPaymentFlowMode('payment_last');
+    setPettyCashEntries([
+      {
+        id: 'pc-init-1',
+        timestamp: new Date(Date.now() - 120 * 60000).toISOString(),
+        description: 'Isi Ulang Gas LPG 12kg Dapur',
+        category: 'operasional',
+        amount: 45000,
+        recordedBy: 'Ratna Dewi',
+        receiptNumber: 'B-8821',
+      },
+      {
+        id: 'pc-init-2',
+        timestamp: new Date(Date.now() - 60 * 60000).toISOString(),
+        description: 'Es Kristal Balok Tambahan Bar Station',
+        category: 'bahan_darurat',
+        amount: 25000,
+        recordedBy: 'Ratna Dewi',
+        receiptNumber: 'B-8839',
+      },
+    ]);
     localStorage.clear();
     setShowResetConfirm(false);
     if (soundEnabled) sounds.playBellSound();
@@ -1144,32 +1256,63 @@ export default function App() {
         activeKdsCount={countActiveKdsItems(activeTransactions)}
         waiterPickupCount={countWaiterPickupItems(activeTransactions)}
         paymentFlowMode={paymentFlowMode}
+        onOpenGoogleSheets={() => handleOpenGoogleSheets('create')}
+        currentStaff={currentStaff}
+        onLockScreen={handleLockScreen}
       />
 
-      {/* Main Floor Plan Grid Interface */}
+      {/* Main Dynamic View: Owner Dashboard, Finance Workspace, or Cashier Floor Plan */}
       <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <FloorPlanGrid
-          tables={tables}
-          transactions={activeTransactions}
-          onSelectTable={() => {
-            sounds.playTapSound();
-          }}
-          onOpenOrder={(table) => {
-            sounds.playTapSound();
-            setOrderModalTable(table);
-          }}
-          onOpenPayment={(table) => {
-            sounds.playTapSound();
-            setPaymentModalTable(table);
-          }}
-          onOpenChecker={(table) => {
-            sounds.playTapSound();
-            setCheckerModalTableId(table.id);
-            setShowCheckerModal(true);
-          }}
-          onClearPaidTable={handleClearPaidTable}
-          onReprintPaidReceipt={handleReprintPaidReceipt}
-        />
+        {activeTab === 'owner' && currentStaff?.role === 'owner' ? (
+          <OwnerDashboardView
+            currentStaff={currentStaff}
+            tables={tables}
+            transactions={activeTransactions}
+            settledTransactions={settledTransactions}
+            rawMaterials={rawMaterials}
+            pettyCashEntries={pettyCashEntries}
+            onOpenGoogleSheets={() => handleOpenGoogleSheets('sales')}
+            onSwitchToFloorPlan={() => setActiveTab('floor')}
+            onSwitchToFinance={() => setActiveTab('finance')}
+            onRestockMaterial={handleRestockMaterial}
+            onResetData={handleResetData}
+            onLockScreen={handleLockScreen}
+          />
+        ) : activeTab === 'finance' && (currentStaff?.role === 'finance' || currentStaff?.role === 'owner') ? (
+          <FinanceView
+            currentStaff={currentStaff}
+            settledTransactions={settledTransactions}
+            pettyCashEntries={pettyCashEntries}
+            onAddPettyCash={handleAddPettyCash}
+            onDeletePettyCash={handleDeletePettyCash}
+            onOpenGoogleSheets={() => handleOpenGoogleSheets('sales')}
+            onReprintReceipt={handleReprintReceipt}
+            onLockScreen={handleLockScreen}
+          />
+        ) : (
+          <FloorPlanGrid
+            tables={tables}
+            transactions={activeTransactions}
+            onSelectTable={() => {
+              sounds.playTapSound();
+            }}
+            onOpenOrder={(table) => {
+              sounds.playTapSound();
+              setOrderModalTable(table);
+            }}
+            onOpenPayment={(table) => {
+              sounds.playTapSound();
+              setPaymentModalTable(table);
+            }}
+            onOpenChecker={(table) => {
+              sounds.playTapSound();
+              setCheckerModalTableId(table.id);
+              setShowCheckerModal(true);
+            }}
+            onClearPaidTable={handleClearPaidTable}
+            onReprintPaidReceipt={handleReprintPaidReceipt}
+          />
+        )}
       </main>
 
       {/* ORDER MODAL (Open Table or Add Order — Supports Payment Last & Payment First) */}
@@ -1243,6 +1386,7 @@ export default function App() {
           materials={rawMaterials}
           onClose={() => setActiveTab('floor')}
           onRestockMaterial={handleRestockMaterial}
+          onOpenGoogleSheets={() => handleOpenGoogleSheets('inventory')}
         />
       )}
 
@@ -1279,6 +1423,17 @@ export default function App() {
             if (activeTab === 'sales') setActiveTab('floor');
           }}
           onReprintReceipt={handleReprintReceipt}
+          onOpenGoogleSheets={() => handleOpenGoogleSheets('sales')}
+        />
+      )}
+
+      {/* GOOGLE SHEETS EXPORT MODAL */}
+      {showSheetsModal && (
+        <GoogleSheetsModal
+          settledTransactions={settledTransactions}
+          materials={rawMaterials}
+          initialMode={sheetsModalMode}
+          onClose={() => setShowSheetsModal(false)}
         />
       )}
 
@@ -1321,6 +1476,16 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* NFC / PIN STAFF LOGIN MODAL */}
+      {(isLocked || !currentStaff) && (
+        <LoginModal
+          currentStaff={currentStaff}
+          onLoginSuccess={handleLoginSuccess}
+          canCancel={!!currentStaff}
+          onCancel={() => setIsLocked(false)}
+        />
       )}
     </div>
   );

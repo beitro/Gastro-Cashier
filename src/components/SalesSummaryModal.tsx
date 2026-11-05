@@ -7,18 +7,21 @@ import {
   Printer,
   ArrowLeft,
   BarChart3,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface SalesSummaryModalProps {
   settledTransactions: Transaction[];
   onClose: () => void;
   onReprintReceipt: (transaction: Transaction) => void;
+  onOpenGoogleSheets?: () => void;
 }
 
 export const SalesSummaryModal: React.FC<SalesSummaryModalProps> = ({
   settledTransactions,
   onClose,
   onReprintReceipt,
+  onOpenGoogleSheets,
 }) => {
   const totalOmzetKotor = settledTransactions.reduce((acc, tx) => acc + tx.totalAmount, 0);
   const totalSubtotal = settledTransactions.reduce((acc, tx) => acc + tx.subtotal, 0);
@@ -66,9 +69,22 @@ export const SalesSummaryModal: React.FC<SalesSummaryModalProps> = ({
             <span>Floor Plan</span>
           </button>
 
-          <span className="text-xs font-mono tabular-nums font-extrabold text-slate-600">
-            {settledTransactions.length} Transaksi Selesai Shift Ini
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono tabular-nums font-extrabold text-slate-600 hidden sm:inline">
+              {settledTransactions.length} Transaksi Selesai Shift Ini
+            </span>
+            {onOpenGoogleSheets && (
+              <button
+                type="button"
+                onClick={onOpenGoogleSheets}
+                className="clay-btn-emerald min-h-[42px] px-4 py-2 text-xs font-black flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer text-white"
+                title="Ekspor Rekap Omzet & Pajak PB1 ke Google Sheets"
+              >
+                <FileSpreadsheet className="w-4 h-4 stroke-[2.2]" />
+                <span>Ekspor ke Google Sheets</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

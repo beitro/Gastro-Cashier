@@ -7,6 +7,7 @@ import {
   Search,
   ArrowLeft,
   Boxes,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { sounds } from '../utils/soundEffects';
 
@@ -14,12 +15,14 @@ interface InventoryModalProps {
   materials: RawMaterial[];
   onClose: () => void;
   onRestockMaterial: (materialId: string, amount: number) => void;
+  onOpenGoogleSheets?: () => void;
 }
 
 export const InventoryModal: React.FC<InventoryModalProps> = ({
   materials,
   onClose,
   onRestockMaterial,
+  onOpenGoogleSheets,
 }) => {
   const [selectedZone, setSelectedZone] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -99,16 +102,30 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
             </div>
           </div>
 
-          <div className="relative w-48 sm:w-60 flex-shrink-0">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              aria-label="Cari bahan baku"
-              placeholder="Cari bahan baku..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full clay-input min-h-[42px] text-xs sm:text-sm font-semibold pl-10 pr-4 py-2"
-            />
+          <div className="flex items-center gap-2.5 shrink-0">
+            {onOpenGoogleSheets && (
+              <button
+                type="button"
+                onClick={onOpenGoogleSheets}
+                className="clay-btn-emerald min-h-[42px] px-3.5 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer text-white"
+                title="Ekspor Inventaris Stok BOM ke Google Sheets"
+              >
+                <FileSpreadsheet className="w-4 h-4 stroke-[2.2]" />
+                <span className="hidden sm:inline">Ekspor ke Google Sheets</span>
+              </button>
+            )}
+
+            <div className="relative w-44 sm:w-56 flex-shrink-0">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                aria-label="Cari bahan baku"
+                placeholder="Cari bahan..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full clay-input min-h-[42px] text-xs sm:text-sm font-semibold pl-10 pr-3 py-2"
+              />
+            </div>
           </div>
         </div>
       </div>

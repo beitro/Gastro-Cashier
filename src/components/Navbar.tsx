@@ -11,15 +11,20 @@ import {
   Boxes,
   Download,
   Check,
+  FileSpreadsheet,
+  Crown,
+  Lock,
 } from 'lucide-react';
-import { PaymentFlowMode, Table } from '../types/pos';
+import { PaymentFlowMode, Table, StaffAccount } from '../types/pos';
 import { downloadFigmaWireframe } from '../utils/figmaWireframe';
 import { sounds } from '../utils/soundEffects';
 
+export type NavTabId = 'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory' | 'owner' | 'finance';
+
 interface NavbarProps {
   tables: Table[];
-  activeTab: 'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory';
-  setActiveTab: (tab: 'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory') => void;
+  activeTab: NavTabId;
+  setActiveTab: (tab: NavTabId) => void;
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
   onResetData: () => void;
@@ -28,6 +33,9 @@ interface NavbarProps {
   activeKdsCount?: number;
   waiterPickupCount?: number;
   paymentFlowMode?: PaymentFlowMode;
+  onOpenGoogleSheets?: () => void;
+  currentStaff?: StaffAccount | null;
+  onLockScreen?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -42,6 +50,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeKdsCount = 0,
   waiterPickupCount = 0,
   paymentFlowMode = 'payment_last',
+  onOpenGoogleSheets,
+  currentStaff,
+  onLockScreen,
 }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [wireframeDownloaded, setWireframeDownloaded] = useState(false);
@@ -62,28 +73,42 @@ export const Navbar: React.FC<NavbarProps> = ({
       availableTables: availableCount,
       occupiedTables: occupiedCount,
       paymentFlowMode,
+      currentRole: currentStaff?.role,
+      staffName: currentStaff?.name,
     });
     setWireframeDownloaded(true);
     setTimeout(() => setWireframeDownloaded(false), 2600);
   };
 
-  const navItems: {
-    id: 'floor' | 'kds' | 'checker' | 'inventory' | 'printer' | 'sales';
+  // Role-based Nav Items
+  const role = currentStaff?.role || 'cashier';
+
+  const allNavItems: {
+    id: NavTabId;
     label: string;
     icon: React.ReactNode;
     badge?: number;
     alert?: boolean;
+    roles: ('owner' | 'cashier' | 'finance')[];
   }[] = [
+    {
+      id: 'owner',
+      label: 'Cockpit Owner',
+      icon: <Crown className="w-4 h-4 stroke-[2.2] text-amber-500" />,
+      roles: ['owner'],
+    },
     {
       id: 'floor',
       label: 'Floor Plan',
       icon: <Store className="w-4 h-4 stroke-[2]" />,
+      roles: ['owner', 'cashier'],
     },
     {
       id: 'kds',
       label: 'KDS Dapur',
       icon: <Flame className="w-4 h-4 stroke-[2]" />,
       badge: activeKdsCount > 0 ? activeKdsCount : undefined,
+      roles: ['owner', 'cashier'],
     },
     {
       id: 'checker',
@@ -91,6 +116,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: <CheckSquare className="w-4 h-4 stroke-[2]" />,
       badge: waiterPickupCount > 0 ? waiterPickupCount : undefined,
       alert: waiterPickupCount > 0,
+      roles: ['owner', 'cashier'],
     },
     {
       id: 'inventory',
@@ -98,19 +124,24 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: <Boxes className="w-4 h-4 stroke-[2]" />,
       badge: lowStockAlertCount > 0 ? lowStockAlertCount : undefined,
       alert: lowStockAlertCount > 0,
+      roles: ['owner', 'finance'],
     },
     {
       id: 'printer',
       label: 'Printer Hub',
       icon: <Printer className="w-4 h-4 stroke-[2]" />,
       badge: recentTicketsCount > 0 ? recentTicketsCount : undefined,
+      roles: ['owner', 'cashier'],
     },
     {
-      id: 'sales',
-      label: 'Omzet & PB1',
+      id: 'finance',
+      label: 'Pembukuan & PB1',
       icon: <BarChart3 className="w-4 h-4 stroke-[2]" />,
+      roles: ['owner', 'finance'],
     },
   ];
+
+  const visibleNavItems = allNavItems.filter((item) => item.roles.includes(role));
 
   return (
     <header className="h-[68px] clay-bar select-none flex-shrink-0 z-30 px-3.5 sm:px-5 flex items-center justify-between gap-3 w-full">
@@ -130,7 +161,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           className="clay-well p-1 flex items-center gap-1 overflow-x-auto no-scrollbar max-w-full"
           aria-label="Main Navigation"
         >
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = activeTab === item.id;
             return (
               <button
@@ -166,8 +197,55 @@ export const Navbar: React.FC<NavbarProps> = ({
         </nav>
       </div>
 
-      {/* Right: Occupancy Readout + Download Figma Wireframe CTA + Tactile Utility Controls */}
+      {/* Right: Staff Chip + Occupancy Readout + Download Figma Wireframe CTA + Tactile Utility Controls */}
       <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+        {/* Active Staff Badge & Lock Screen Button */}
+        {currentStaff && (
+          <button
+            type="button"
+            onClick={() => {
+              if (soundEnabled) sounds.playTapSound();
+              if (onLockScreen) onLockScreen();
+            }}
+            title="Klik untuk Kunci Layar / Ganti User (NFC Tag / PIN)"
+            className={`min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-2xl flex items-center gap-2 cursor-pointer transition-all ${
+              currentStaff.role === 'owner'
+                ? 'clay-tint-amber text-amber-950 border border-amber-300'
+                : currentStaff.role === 'finance'
+                ? 'clay-tint-indigo text-indigo-950 border border-indigo-300'
+                : 'clay-tint-emerald text-emerald-950 border border-emerald-300'
+            }`}
+          >
+            <div
+              className={`w-7 h-7 rounded-xl flex items-center justify-center text-white text-xs font-black shadow-sm shrink-0 ${
+                currentStaff.role === 'owner'
+                  ? 'bg-amber-600'
+                  : currentStaff.role === 'finance'
+                  ? 'bg-indigo-600'
+                  : 'bg-emerald-600'
+              }`}
+            >
+              {currentStaff.role === 'owner' ? (
+                <Crown className="w-4 h-4" />
+              ) : currentStaff.role === 'finance' ? (
+                <BarChart3 className="w-4 h-4" />
+              ) : (
+                <Store className="w-4 h-4" />
+              )}
+            </div>
+            <div className="text-left hidden lg:block">
+              <div className="text-[11px] font-black leading-tight flex items-center gap-1.5">
+                <span>{currentStaff.name.split(' ')[0]}</span>
+                <span className="text-[9px] uppercase px-1 py-0.2 rounded bg-white/70 font-mono font-bold">
+                  {currentStaff.role}
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-500 font-bold block flex items-center gap-0.5">
+                <Lock className="w-2.5 h-2.5" /> Kunci / Ganti
+              </span>
+            </div>
+          </button>
+        )}
         <div className="hidden xl:flex items-center gap-2 text-xs text-slate-600 font-mono tabular-nums whitespace-nowrap pr-1">
           <span className="text-emerald-700 font-extrabold">{availableCount} Kosong</span>
           <span aria-hidden="true" className="text-slate-300">·</span>
@@ -177,6 +255,23 @@ export const Navbar: React.FC<NavbarProps> = ({
             {currentTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
           </span>
         </div>
+
+        {/* Google Sheets Integration Button */}
+        {onOpenGoogleSheets && (
+          <button
+            type="button"
+            onClick={() => {
+              if (soundEnabled) sounds.playTapSound();
+              onOpenGoogleSheets();
+            }}
+            aria-label="Integrasi Google Sheets"
+            title="Ekspor Rekap Omzet PB1 dan Inventaris Bahan ke Google Sheets"
+            className="min-h-[42px] px-3.5 py-2 text-xs font-black flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer clay-btn-emerald text-white"
+          >
+            <FileSpreadsheet className="w-4 h-4 shrink-0 stroke-[2.2]" />
+            <span className="hidden sm:inline">Google Sheets</span>
+          </button>
+        )}
 
         {/* Download Figma Wireframe Button */}
         <button
