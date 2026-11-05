@@ -1,0 +1,1327 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Table,
+  Transaction,
+  OrderItem,
+  PrintTicket,
+  OrderBatch,
+  RawMaterial,
+  CookingStatus,
+  PaymentFlowMode,
+} from './types/pos';
+import { INITIAL_TABLES, MENU_ITEMS, RAW_MATERIALS } from './data/initialData';
+import {
+  calculateOrderTotals,
+  generatePrintTickets,
+  deductRecipeMaterials,
+  handoffTransactionItemsToWaiter,
+  countActiveKdsItems,
+  countWaiterPickupItems,
+  isItemWaitingForWaiter,
+} from './utils/posCalculations';
+import { sounds } from './utils/soundEffects';
+
+import { Navbar } from './components/Navbar';
+import { FloorPlanGrid } from './components/FloorPlanGrid';
+import { OrderModal } from './components/OrderModal';
+import { PrinterModal } from './components/PrinterModal';
+import { WaiterCheckerModal } from './components/WaiterCheckerModal';
+import { PaymentModal } from './components/PaymentModal';
+import { SalesSummaryModal } from './components/SalesSummaryModal';
+import { KDSModal } from './components/KDSModal';
+import { InventoryModal } from './components/InventoryModal';
+
+const STORAGE_KEY_TABLES = 'resto_pos_tables_v1';
+const STORAGE_KEY_TRANSACTIONS = 'resto_pos_tx_v1';
+const STORAGE_KEY_SETTLED = 'resto_pos_settled_v1';
+const STORAGE_KEY_TICKETS = 'resto_pos_tickets_v1';
+const STORAGE_KEY_MATERIALS = 'resto_pos_materials_v1';
+const STORAGE_KEY_PAYMENT_MODE = 'resto_pos_payment_mode_v1';
+
+// Seed sample active transactions for occupied tables
+const INITIAL_TRANSACTIONS: Record<string, Transaction> = {
+  'TRX-SAMPLE-001': {
+    id: 'TRX-SAMPLE-001',
+    tableId: 'T05',
+    tableNumber: '05',
+    area: 'indoor',
+    guestCount: 3,
+    waiterName: 'Doni Setiawan',
+    openedAt: new Date(Date.now() - 35 * 60000).toISOString(),
+    status: 'active',
+    batches: [
+      {
+        batchNumber: 1,
+        timestamp: new Date(Date.now() - 35 * 60000).toISOString(),
+        items: [
+          {
+            id: 'item-sample-1',
+            menuItemId: 'food-1',
+            name: 'Nasi Goreng Spesial Resto',
+            category: 'makanan',
+            destination: 'kitchen',
+            unitPrice: 38000,
+            quantity: 2,
+            selectedModifiers: [{ groupName: 'Level Pedas', optionName: 'Pedas Sedang', priceDelta: 0 }],
+            notes: 'Acar dipisah',
+            subtotal: 76000,
+            batchNumber: 1,
+            isServed: true,
+          },
+          {
+            id: 'item-sample-2',
+            menuItemId: 'bev-1',
+            name: 'Es Teh Manis Jasmine',
+            category: 'minuman',
+            destination: 'bar',
+            unitPrice: 9000,
+            quantity: 3,
+            selectedModifiers: [{ groupName: 'Es Batu', optionName: 'Es Normal', priceDelta: 0 }],
+            notes: '',
+            subtotal: 27000,
+            batchNumber: 1,
+            isServed: true,
+          },
+          {
+            id: 'item-sample-3',
+            menuItemId: 'snack-2',
+            name: 'Tahu Cabe Garam Crispy',
+            category: 'snack',
+            destination: 'kitchen',
+            unitPrice: 20000,
+            quantity: 1,
+            selectedModifiers: [],
+            notes: 'Goreng garing',
+            subtotal: 20000,
+            batchNumber: 1,
+            isServed: false,
+            cookingStatus: 'ready',
+          },
+        ],
+      },
+    ],
+    allCurrentItems: [
+      {
+        id: 'item-sample-1',
+        menuItemId: 'food-1',
+        name: 'Nasi Goreng Spesial Resto',
+        category: 'makanan',
+        destination: 'kitchen',
+        unitPrice: 38000,
+        quantity: 2,
+        selectedModifiers: [{ groupName: 'Level Pedas', optionName: 'Pedas Sedang', priceDelta: 0 }],
+        notes: 'Acar dipisah',
+        subtotal: 76000,
+        batchNumber: 1,
+        isServed: true,
+      },
+      {
+        id: 'item-sample-2',
+        menuItemId: 'bev-1',
+        name: 'Es Teh Manis Jasmine',
+        category: 'minuman',
+        destination: 'bar',
+        unitPrice: 9000,
+        quantity: 3,
+        selectedModifiers: [{ groupName: 'Es Batu', optionName: 'Es Normal', priceDelta: 0 }],
+        notes: '',
+        subtotal: 27000,
+        batchNumber: 1,
+        isServed: true,
+      },
+      {
+        id: 'item-sample-3',
+        menuItemId: 'snack-2',
+        name: 'Tahu Cabe Garam Crispy',
+        category: 'snack',
+        destination: 'kitchen',
+        unitPrice: 20000,
+        quantity: 1,
+        selectedModifiers: [],
+        notes: 'Goreng garing',
+        subtotal: 20000,
+        batchNumber: 1,
+        isServed: false,
+        cookingStatus: 'ready',
+      },
+    ],
+    subtotal: 123000,
+    serviceChargeRate: 0.05,
+    serviceChargeAmount: 6150,
+    taxRate: 0.1,
+    taxAmount: 12915,
+    discountAmount: 0,
+    totalAmount: 142065,
+  },
+  'TRX-SAMPLE-002': {
+    id: 'TRX-SAMPLE-002',
+    tableId: 'T09',
+    tableNumber: '09',
+    area: 'indoor',
+    guestCount: 2,
+    waiterName: 'Siti Rahma',
+    openedAt: new Date(Date.now() - 15 * 60000).toISOString(),
+    status: 'active',
+    batches: [
+      {
+        batchNumber: 1,
+        timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
+        items: [
+          {
+            id: 'item-sample-4',
+            menuItemId: 'food-2',
+            name: 'Ayam Bakar Madu Pedas',
+            category: 'makanan',
+            destination: 'kitchen',
+            unitPrice: 42000,
+            quantity: 2,
+            selectedModifiers: [{ groupName: 'Pilihan Potongan', optionName: 'Paha Atas & Bawah', priceDelta: 0 }],
+            notes: 'Sambal terasi',
+            subtotal: 84000,
+            batchNumber: 1,
+            isServed: true,
+          },
+          {
+            id: 'item-sample-5',
+            menuItemId: 'bev-3',
+            name: 'Kopi Susu Gula Aren Barista',
+            category: 'minuman',
+            destination: 'bar',
+            unitPrice: 24000,
+            quantity: 2,
+            selectedModifiers: [{ groupName: 'Level Gula Aren', optionName: 'Normal 100%', priceDelta: 0 }],
+            notes: '',
+            subtotal: 48000,
+            batchNumber: 1,
+            isServed: true,
+          },
+        ],
+      },
+    ],
+    allCurrentItems: [
+      {
+        id: 'item-sample-4',
+        menuItemId: 'food-2',
+        name: 'Ayam Bakar Madu Pedas',
+        category: 'makanan',
+        destination: 'kitchen',
+        unitPrice: 42000,
+        quantity: 2,
+        selectedModifiers: [{ groupName: 'Pilihan Potongan', optionName: 'Paha Atas & Bawah', priceDelta: 0 }],
+        notes: 'Sambal terasi',
+        subtotal: 84000,
+        batchNumber: 1,
+        isServed: true,
+      },
+      {
+        id: 'item-sample-5',
+        menuItemId: 'bev-3',
+        name: 'Kopi Susu Gula Aren Barista',
+        category: 'minuman',
+        destination: 'bar',
+        unitPrice: 24000,
+        quantity: 2,
+        selectedModifiers: [{ groupName: 'Level Gula Aren', optionName: 'Normal 100%', priceDelta: 0 }],
+        notes: '',
+        subtotal: 48000,
+        batchNumber: 1,
+        isServed: true,
+      },
+    ],
+    subtotal: 132000,
+    serviceChargeRate: 0.05,
+    serviceChargeAmount: 6600,
+    taxRate: 0.1,
+    taxAmount: 13860,
+    discountAmount: 0,
+    totalAmount: 152460,
+  },
+  'TRX-SAMPLE-003': {
+    id: 'TRX-SAMPLE-003',
+    tableId: 'T15',
+    tableNumber: '15',
+    area: 'indoor',
+    guestCount: 4,
+    waiterName: 'Budi Prasetyo',
+    openedAt: new Date(Date.now() - 50 * 60000).toISOString(),
+    status: 'active',
+    batches: [
+      {
+        batchNumber: 1,
+        timestamp: new Date(Date.now() - 50 * 60000).toISOString(),
+        items: [
+          {
+            id: 'item-sample-6',
+            menuItemId: 'food-4',
+            name: 'Gurame Bakar Jimbaran (Porsi 2-3 Org)',
+            category: 'makanan',
+            destination: 'kitchen',
+            unitPrice: 85000,
+            quantity: 1,
+            selectedModifiers: [],
+            notes: 'Pedas manis mantap',
+            subtotal: 85000,
+            batchNumber: 1,
+            isServed: true,
+          },
+          {
+            id: 'item-sample-7',
+            menuItemId: 'food-8',
+            name: 'Tumis Kangkung Belacan Hotplate',
+            category: 'makanan',
+            destination: 'kitchen',
+            unitPrice: 24000,
+            quantity: 2,
+            selectedModifiers: [],
+            notes: '',
+            subtotal: 48000,
+            batchNumber: 1,
+            isServed: true,
+          },
+        ],
+      },
+    ],
+    allCurrentItems: [
+      {
+        id: 'item-sample-6',
+        menuItemId: 'food-4',
+        name: 'Gurame Bakar Jimbaran (Porsi 2-3 Org)',
+        category: 'makanan',
+        destination: 'kitchen',
+        unitPrice: 85000,
+        quantity: 1,
+        selectedModifiers: [],
+        notes: 'Pedas manis mantap',
+        subtotal: 85000,
+        batchNumber: 1,
+        isServed: true,
+      },
+      {
+        id: 'item-sample-7',
+        menuItemId: 'food-8',
+        name: 'Tumis Kangkung Belacan Hotplate',
+        category: 'makanan',
+        destination: 'kitchen',
+        unitPrice: 24000,
+        quantity: 2,
+        selectedModifiers: [],
+        notes: '',
+        subtotal: 48000,
+        batchNumber: 1,
+        isServed: true,
+      },
+    ],
+    subtotal: 133000,
+    serviceChargeRate: 0.05,
+    serviceChargeAmount: 6650,
+    taxRate: 0.1,
+    taxAmount: 13965,
+    discountAmount: 0,
+    totalAmount: 153615,
+  },
+  'TRX-SAMPLE-004': {
+    id: 'TRX-SAMPLE-004',
+    tableId: 'T21',
+    tableNumber: '21',
+    area: 'outdoor',
+    guestCount: 2,
+    waiterName: 'Doni Setiawan',
+    openedAt: new Date(Date.now() - 20 * 60000).toISOString(),
+    status: 'active',
+    batches: [
+      {
+        batchNumber: 1,
+        timestamp: new Date(Date.now() - 20 * 60000).toISOString(),
+        items: [
+          {
+            id: 'item-sample-8',
+            menuItemId: 'food-5',
+            name: 'Sate Ayam Madura (10 Tusuk)',
+            category: 'makanan',
+            destination: 'kitchen',
+            unitPrice: 36000,
+            quantity: 2,
+            selectedModifiers: [],
+            notes: 'Bumbu kacang kental',
+            subtotal: 72000,
+            batchNumber: 1,
+            isServed: false,
+            cookingStatus: 'cooking',
+          },
+          {
+            id: 'item-sample-9',
+            menuItemId: 'bev-2',
+            name: 'Es Jeruk Peras Murni',
+            category: 'minuman',
+            destination: 'bar',
+            unitPrice: 18000,
+            quantity: 2,
+            selectedModifiers: [],
+            notes: 'Es dingin',
+            subtotal: 36000,
+            batchNumber: 1,
+            isServed: true,
+          },
+        ],
+      },
+    ],
+    allCurrentItems: [
+      {
+        id: 'item-sample-8',
+        menuItemId: 'food-5',
+        name: 'Sate Ayam Madura (10 Tusuk)',
+        category: 'makanan',
+        destination: 'kitchen',
+        unitPrice: 36000,
+        quantity: 2,
+        selectedModifiers: [],
+        notes: 'Bumbu kacang kental',
+        subtotal: 72000,
+        batchNumber: 1,
+        isServed: false,
+        cookingStatus: 'cooking',
+      },
+      {
+        id: 'item-sample-9',
+        menuItemId: 'bev-2',
+        name: 'Es Jeruk Peras Murni',
+        category: 'minuman',
+        destination: 'bar',
+        unitPrice: 18000,
+        quantity: 2,
+        selectedModifiers: [],
+        notes: 'Es dingin',
+        subtotal: 36000,
+        batchNumber: 1,
+        isServed: true,
+      },
+    ],
+    subtotal: 108000,
+    serviceChargeRate: 0.05,
+    serviceChargeAmount: 5400,
+    taxRate: 0.1,
+    taxAmount: 11340,
+    discountAmount: 0,
+    totalAmount: 124740,
+  },
+};
+
+export default function App() {
+  // State Initialization
+  const [tables, setTables] = useState<Table[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_TABLES);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return INITIAL_TABLES;
+  });
+
+  const [activeTransactions, setActiveTransactions] = useState<Record<string, Transaction>>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return INITIAL_TRANSACTIONS;
+  });
+
+  const [settledTransactions, setSettledTransactions] = useState<Transaction[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SETTLED);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const [allPrintTickets, setAllPrintTickets] = useState<PrintTicket[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_TICKETS);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MATERIALS);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return RAW_MATERIALS;
+  });
+
+  const [paymentFlowMode, setPaymentFlowMode] = useState<PaymentFlowMode>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_PAYMENT_MODE);
+      if (saved === 'payment_first' || saved === 'payment_last') return saved;
+    } catch {}
+    return 'payment_last';
+  });
+
+  // UI Navigation & Modals
+  const [activeTab, setActiveTab] = useState<'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory'>('floor');
+  const [soundEnabled, setSoundEnabled] = useState(true);
+
+  // Active modal targets
+  const [orderModalTable, setOrderModalTable] = useState<Table | null>(null);
+  const [paymentModalTable, setPaymentModalTable] = useState<Table | null>(null);
+  const [checkerModalTableId, setCheckerModalTableId] = useState<string | undefined>(undefined);
+  const [showCheckerModal, setShowCheckerModal] = useState(false);
+  const [showPrinterModal, setShowPrinterModal] = useState(false);
+  const [printerModalTickets, setPrinterModalTickets] = useState<PrintTicket[]>([]);
+  const [showSalesModal, setShowSalesModal] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  // Sync to LocalStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_TABLES, JSON.stringify(tables));
+      localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(activeTransactions));
+      localStorage.setItem(STORAGE_KEY_SETTLED, JSON.stringify(settledTransactions));
+      localStorage.setItem(STORAGE_KEY_TICKETS, JSON.stringify(allPrintTickets));
+      localStorage.setItem(STORAGE_KEY_MATERIALS, JSON.stringify(rawMaterials));
+      localStorage.setItem(STORAGE_KEY_PAYMENT_MODE, paymentFlowMode);
+    } catch {}
+  }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, paymentFlowMode]);
+
+  // RESET DEMO DATA
+  const handleResetData = () => {
+    setShowResetConfirm(true);
+  };
+
+  const confirmResetData = () => {
+    setTables(INITIAL_TABLES);
+    setActiveTransactions(INITIAL_TRANSACTIONS);
+    setSettledTransactions([]);
+    setAllPrintTickets([]);
+    setRawMaterials(RAW_MATERIALS);
+    setPaymentFlowMode('payment_last');
+    localStorage.clear();
+    setShowResetConfirm(false);
+    if (soundEnabled) sounds.playBellSound();
+  };
+
+  // FLOW 1 (EXISTING): PAYMENT LAST (BAYAR BELAKANG) — OPEN TABLE & SEND TO KITCHEN/BAR
+  const handleSubmitOrder = (params: {
+    table: Table;
+    guestCount: number;
+    waiterName: string;
+    newItems: OrderItem[];
+    batchNumber: number;
+  }) => {
+    const { table, guestCount, waiterName, batchNumber } = params;
+    const newItems = params.newItems.map((item) => ({ ...item, isPaid: false }));
+    const now = new Date().toISOString();
+
+    let transaction: Transaction;
+    const existingTxId = table.currentTransactionId;
+    const existingTx = existingTxId ? activeTransactions[existingTxId] : null;
+
+    if (existingTx) {
+      const updatedBatches: OrderBatch[] = [
+        ...existingTx.batches,
+        {
+          batchNumber,
+          timestamp: now,
+          items: newItems,
+        },
+      ];
+      const mergedItems = [...existingTx.allCurrentItems, ...newItems];
+      const totals = calculateOrderTotals(mergedItems, existingTx.discountAmount);
+
+      transaction = {
+        ...existingTx,
+        paymentFlow: 'payment_last',
+        isPaid: false,
+        batches: updatedBatches,
+        allCurrentItems: mergedItems,
+        subtotal: totals.subtotal,
+        serviceChargeAmount: totals.serviceChargeAmount,
+        taxAmount: totals.taxAmount,
+        totalAmount: totals.totalAmount,
+      };
+    } else {
+      const newTxId = `TRX-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const totals = calculateOrderTotals(newItems);
+
+      transaction = {
+        id: newTxId,
+        tableId: table.id,
+        tableNumber: table.tableNumber,
+        area: table.area,
+        guestCount,
+        waiterName,
+        openedAt: now,
+        status: 'active',
+        paymentFlow: 'payment_last',
+        isPaid: false,
+        batches: [
+          {
+            batchNumber: 1,
+            timestamp: now,
+            items: newItems,
+          },
+        ],
+        allCurrentItems: newItems,
+        subtotal: totals.subtotal,
+        serviceChargeRate: 0.05,
+        serviceChargeAmount: totals.serviceChargeAmount,
+        taxRate: 0.1,
+        taxAmount: totals.taxAmount,
+        discountAmount: 0,
+        totalAmount: totals.totalAmount,
+      };
+    }
+
+    const newTickets = generatePrintTickets({
+      transaction,
+      batchItems: newItems,
+      batchNumber,
+      type: 'order',
+    });
+
+    setTables((prev) =>
+      prev.map((t) =>
+        t.id === table.id
+          ? {
+              ...t,
+              status: 'occupied',
+              currentTransactionId: transaction.id,
+              guestCount,
+              waiterName,
+              openedAt: t.openedAt || now,
+            }
+          : t
+      )
+    );
+
+    setActiveTransactions((prev) => ({
+      ...prev,
+      [transaction.id]: transaction,
+    }));
+
+    setAllPrintTickets((prev) => [...newTickets, ...prev]);
+
+    setRawMaterials((prevMaterials) => deductRecipeMaterials(newItems, prevMaterials, MENU_ITEMS).updatedMaterials);
+
+    setOrderModalTable(null);
+    setPrinterModalTickets(newTickets);
+    setShowPrinterModal(true);
+
+    if (soundEnabled) {
+      sounds.playPrinterSound();
+      setTimeout(() => sounds.playBellSound(), 350);
+    }
+  };
+
+  // FLOW 2 (NEW): PAYMENT FIRST (LANGSUNG BAYAR DI DEPAN) — SETTLE IMMEDIATELY + PRINT RECEIPT & KITCHEN/BAR/CHECKER
+  const handleSubmitPaymentFirstOrder = (params: {
+    table: Table;
+    guestCount: number;
+    waiterName: string;
+    newItems: OrderItem[];
+    batchNumber: number;
+    paymentMethod: 'cash' | 'qris' | 'card';
+    cashGiven: number;
+    changeAmount: number;
+    discountAmount: number;
+    keepTableAvailable?: boolean;
+  }) => {
+    const {
+      table,
+      guestCount,
+      waiterName,
+      batchNumber,
+      paymentMethod,
+      cashGiven,
+      changeAmount,
+      discountAmount,
+      keepTableAvailable = false,
+    } = params;
+    const now = new Date().toISOString();
+    const paidNewItems = params.newItems.map((item) => ({ ...item, isPaid: true }));
+
+    const existingTxId = table.currentTransactionId;
+    const existingTx = existingTxId ? activeTransactions[existingTxId] : null;
+    const unpaidExistingItems = existingTx
+      ? existingTx.allCurrentItems.filter((i) => !i.isPaid).map((i) => ({ ...i, isPaid: true }))
+      : [];
+
+    // Items settled in this upfront payment
+    const itemsPaidNow = [...unpaidExistingItems, ...paidNewItems];
+    const settledTotals = calculateOrderTotals(itemsPaidNow, discountAmount);
+    const settledTxId = `TRX-PF-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const settledRecord: Transaction = {
+      id: settledTxId,
+      tableId: table.id,
+      tableNumber: table.tableNumber,
+      area: table.area,
+      guestCount,
+      waiterName,
+      openedAt: existingTx?.openedAt || now,
+      status: 'settled',
+      paymentFlow: 'payment_first',
+      isPaid: true,
+      batches: [
+        {
+          batchNumber,
+          timestamp: now,
+          items: itemsPaidNow,
+        },
+      ],
+      allCurrentItems: itemsPaidNow,
+      subtotal: settledTotals.subtotal,
+      serviceChargeRate: 0.05,
+      serviceChargeAmount: settledTotals.serviceChargeAmount,
+      taxRate: 0.1,
+      taxAmount: settledTotals.taxAmount,
+      discountAmount,
+      totalAmount: settledTotals.totalAmount,
+      paidAt: now,
+      paymentMethod,
+      cashGiven,
+      changeAmount,
+      cashierName: 'Budi Prasetyo',
+    };
+
+    // 1. Record Omzet & PB1 immediately
+    setSettledTransactions((prev) => [settledRecord, ...prev]);
+
+    // 2. Deduct BOM Raw Materials immediately
+    setRawMaterials((prevMaterials) => deductRecipeMaterials(paidNewItems, prevMaterials, MENU_ITEMS).updatedMaterials);
+
+    // 3. Generate Official Payment Receipt + Kitchen + Bar + Checker tickets together
+    const paymentFirstTickets = generatePrintTickets({
+      transaction: settledRecord,
+      batchItems: paidNewItems,
+      batchNumber,
+      type: 'payment_first',
+    });
+
+    setAllPrintTickets((prev) => [...paymentFirstTickets, ...prev]);
+
+    // 4. Update Table & KDS/Checker Serving State
+    if (keepTableAvailable && !existingTx) {
+      // Takeaway / Fast Counter: keep table available (Hijau Kosong)
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === table.id
+            ? {
+                ...t,
+                status: 'available',
+                currentTransactionId: undefined,
+                guestCount: undefined,
+                openedAt: undefined,
+                waiterName: undefined,
+              }
+            : t
+        )
+      );
+    } else {
+      // Dine-In Payment First: mark table OCCUPIED • LUNAS so KDS & Waiter Checker track serving
+      const activeTxId = existingTx ? existingTx.id : settledTxId;
+      const mergedAllItems = existingTx
+        ? [
+            ...existingTx.allCurrentItems.map((i) => ({ ...i, isPaid: true })),
+            ...paidNewItems,
+          ]
+        : paidNewItems;
+      const mergedTotals = calculateOrderTotals(mergedAllItems, discountAmount);
+      const updatedBatches: OrderBatch[] = existingTx
+        ? [
+            ...existingTx.batches.map((b) => ({
+              ...b,
+              items: b.items.map((i) => ({ ...i, isPaid: true })),
+            })),
+            { batchNumber, timestamp: now, items: paidNewItems },
+          ]
+        : [{ batchNumber: 1, timestamp: now, items: paidNewItems }];
+
+      const activeServingTx: Transaction = {
+        id: activeTxId,
+        tableId: table.id,
+        tableNumber: table.tableNumber,
+        area: table.area,
+        guestCount,
+        waiterName,
+        openedAt: existingTx?.openedAt || now,
+        status: 'active',
+        paymentFlow: 'payment_first',
+        isPaid: true,
+        batches: updatedBatches,
+        allCurrentItems: mergedAllItems,
+        subtotal: mergedTotals.subtotal,
+        serviceChargeRate: 0.05,
+        serviceChargeAmount: mergedTotals.serviceChargeAmount,
+        taxRate: 0.1,
+        taxAmount: mergedTotals.taxAmount,
+        discountAmount,
+        totalAmount: mergedTotals.totalAmount,
+        paidAt: now,
+        paymentMethod,
+        cashGiven,
+        changeAmount,
+        cashierName: 'Budi Prasetyo',
+      };
+
+      setActiveTransactions((prev) => ({
+        ...prev,
+        [activeTxId]: activeServingTx,
+      }));
+
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === table.id
+            ? {
+                ...t,
+                status: 'occupied',
+                currentTransactionId: activeTxId,
+                guestCount,
+                waiterName,
+                openedAt: t.openedAt || now,
+              }
+            : t
+        )
+      );
+    }
+
+    // 5. Close OrderModal and open Auto-Routing Printer Hub with Payment Receipt + Station Slips
+    setOrderModalTable(null);
+    setPrinterModalTickets(paymentFirstTickets);
+    setShowPrinterModal(true);
+
+    if (soundEnabled) {
+      sounds.playPrinterSound();
+      setTimeout(() => sounds.playBellSound(), 350);
+    }
+  };
+
+  // KDS Dapur & Barista Cooking Status Management
+  const handleUpdateCookingStatus = (transactionId: string, itemId: string, status: CookingStatus) => {
+    const now = new Date().toISOString();
+    setActiveTransactions((prev) => {
+      const tx = prev[transactionId];
+      if (!tx) return prev;
+
+      const updatedItems = tx.allCurrentItems.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              cookingStatus: status,
+              handedOffAt: status === 'handed_off' ? now : item.handedOffAt,
+            }
+          : item
+      );
+
+      const updatedBatches = tx.batches.map((b) => ({
+        ...b,
+        items: b.items.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                cookingStatus: status,
+                handedOffAt: status === 'handed_off' ? now : item.handedOffAt,
+              }
+            : item
+        ),
+      }));
+
+      return {
+        ...prev,
+        [transactionId]: {
+          ...tx,
+          allCurrentItems: updatedItems,
+          batches: updatedBatches,
+        },
+      };
+    });
+  };
+
+  // KDS -> Waiter Ticket Handoff (removes completed items/ticket from KDS & moves to Waiter Checker)
+  const handleHandoffTicketToWaiter = (
+    transactionId: string,
+    options?: {
+      stationFilter?: 'all' | 'kitchen' | 'bar';
+      onlyReady?: boolean;
+      openCheckerTableId?: string;
+    }
+  ) => {
+    setActiveTransactions((prev) => {
+      const tx = prev[transactionId];
+      if (!tx) return prev;
+      return {
+        ...prev,
+        [transactionId]: handoffTransactionItemsToWaiter(tx, {
+          stationFilter: options?.stationFilter,
+          onlyReady: options?.onlyReady,
+        }),
+      };
+    });
+
+    if (options?.openCheckerTableId) {
+      setCheckerModalTableId(options.openCheckerTableId);
+      setActiveTab('checker');
+      setShowCheckerModal(true);
+    }
+  };
+
+  // RestoSync Feature - Quick Restock Material
+  const handleRestockMaterial = (materialId: string, amount: number) => {
+    setRawMaterials((prev) =>
+      prev.map((m) =>
+        m.id === materialId
+          ? { ...m, currentStock: Number((m.currentStock + amount).toFixed(2)) }
+          : m
+      )
+    );
+  };
+
+  // STEP 5: TOGGLE SERVED ITEM (Pencontrengan Waiter)
+  const handleToggleItemServed = (transactionId: string, itemId: string) => {
+    setActiveTransactions((prev) => {
+      const tx = prev[transactionId];
+      if (!tx) return prev;
+
+      const updatedItems = tx.allCurrentItems.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              isServed: !item.isServed,
+              servedAt: !item.isServed ? new Date().toISOString() : undefined,
+            }
+          : item
+      );
+
+      return {
+        ...prev,
+        [transactionId]: {
+          ...tx,
+          allCurrentItems: updatedItems,
+        },
+      };
+    });
+
+    // Also update tickets in state if present
+    setAllPrintTickets((prev) =>
+      prev.map((t) => ({
+        ...t,
+        items: t.items.map((i) =>
+          i.id === itemId
+            ? { ...i, isServed: !i.isServed }
+            : i
+        ),
+      }))
+    );
+  };
+
+  // Mark all served for a table
+  const handleMarkAllServed = (transactionId: string) => {
+    const now = new Date().toISOString();
+    setActiveTransactions((prev) => {
+      const tx = prev[transactionId];
+      if (!tx) return prev;
+
+      const updatedItems = tx.allCurrentItems.map((item) => ({
+        ...item,
+        isServed: true,
+        cookingStatus: 'handed_off' as const,
+        servedAt: item.servedAt || now,
+      }));
+
+      return {
+        ...prev,
+        [transactionId]: {
+          ...tx,
+          allCurrentItems: updatedItems,
+        },
+      };
+    });
+  };
+
+  // Mark all handed-off (Siap Antar) items served for a table
+  const handleMarkHandedOffServed = (transactionId: string) => {
+    const now = new Date().toISOString();
+    setActiveTransactions((prev) => {
+      const tx = prev[transactionId];
+      if (!tx) return prev;
+
+      const updatedItems = tx.allCurrentItems.map((item) =>
+        isItemWaitingForWaiter(item)
+          ? {
+              ...item,
+              isServed: true,
+              servedAt: now,
+            }
+          : item
+      );
+
+      return {
+        ...prev,
+        [transactionId]: {
+          ...tx,
+          allCurrentItems: updatedItems,
+        },
+      };
+    });
+  };
+
+  // STEP 7: SETTLEMENT & CLOSE TABLE
+  const handleCompleteSettlement = (params: {
+    transactionId: string;
+    tableId: string;
+    paymentMethod: 'cash' | 'qris' | 'card';
+    cashGiven?: number;
+    changeAmount?: number;
+    discountAmount: number;
+  }) => {
+    const { transactionId, tableId, paymentMethod, cashGiven, changeAmount, discountAmount } = params;
+    const currentTx = activeTransactions[transactionId];
+    if (!currentTx) return;
+
+    const now = new Date().toISOString();
+    const unpaidItems = currentTx.allCurrentItems.filter((i) => !i.isPaid);
+    const itemsToSettle = unpaidItems.length > 0 ? unpaidItems : currentTx.allCurrentItems;
+    const totals = calculateOrderTotals(itemsToSettle, discountAmount);
+
+    const completedTx: Transaction = {
+      ...currentTx,
+      status: 'settled',
+      paymentFlow: 'payment_last',
+      isPaid: true,
+      allCurrentItems: itemsToSettle.map((i) => ({ ...i, isPaid: true })),
+      paidAt: now,
+      paymentMethod,
+      cashGiven,
+      changeAmount,
+      cashierName: 'Budi Prasetyo',
+      discountAmount,
+      subtotal: totals.subtotal,
+      serviceChargeAmount: totals.serviceChargeAmount,
+      taxAmount: totals.taxAmount,
+      totalAmount: totals.totalAmount,
+    };
+
+    // Generate Struk Pembayaran Sah Customer Receipt
+    const receiptTicket = generatePrintTickets({
+      transaction: completedTx,
+      batchItems: completedTx.allCurrentItems,
+      batchNumber: completedTx.batches.length,
+      type: 'settlement',
+    });
+
+    // Move to settled
+    setSettledTransactions((prev) => [completedTx, ...prev]);
+
+    // Remove from active
+    setActiveTransactions((prev) => {
+      const copy = { ...prev };
+      delete copy[transactionId];
+      return copy;
+    });
+
+    // Step 7: Turn table color back to GREEN (kosong / siap pakai)
+    setTables((prev) =>
+      prev.map((t) =>
+        t.id === tableId
+          ? {
+              ...t,
+              status: 'available',
+              currentTransactionId: undefined,
+              guestCount: undefined,
+              openedAt: undefined,
+              waiterName: undefined,
+            }
+          : t
+      )
+    );
+
+    setAllPrintTickets((prev) => [...receiptTicket, ...prev]);
+
+    // Close payment modal and show Customer Receipt immediately
+    setPaymentModalTable(null);
+    setPrinterModalTickets(receiptTicket);
+    setShowPrinterModal(true);
+
+    if (soundEnabled) {
+      sounds.playPrinterSound();
+    }
+  };
+
+  // Clear an already-paid (Payment First) table back to Available without double-counting revenue
+  const handleClearPaidTable = (table: Table) => {
+    const txId = table.currentTransactionId;
+    if (txId) {
+      setActiveTransactions((prev) => {
+        const copy = { ...prev };
+        delete copy[txId];
+        return copy;
+      });
+    }
+    setTables((prev) =>
+      prev.map((t) =>
+        t.id === table.id
+          ? {
+              ...t,
+              status: 'available',
+              currentTransactionId: undefined,
+              guestCount: undefined,
+              openedAt: undefined,
+              waiterName: undefined,
+            }
+          : t
+      )
+    );
+    if (soundEnabled) sounds.playBellSound();
+  };
+
+  // Reprint receipt for an active Payment First (Lunas) table
+  const handleReprintPaidReceipt = (table: Table) => {
+    if (!table.currentTransactionId) return;
+    const tx = activeTransactions[table.currentTransactionId];
+    if (!tx) return;
+    const receiptTicket = generatePrintTickets({
+      transaction: tx,
+      batchItems: tx.allCurrentItems,
+      batchNumber: tx.batches.length,
+      type: 'settlement',
+    });
+    setPrinterModalTickets(receiptTicket);
+    setShowPrinterModal(true);
+    if (soundEnabled) sounds.playPrinterSound();
+  };
+
+  // Reprint helper
+  const handleReprintReceipt = (tx: Transaction) => {
+    const receiptTicket = generatePrintTickets({
+      transaction: tx,
+      batchItems: tx.allCurrentItems,
+      batchNumber: tx.batches.length,
+      type: 'settlement',
+    });
+    setPrinterModalTickets(receiptTicket);
+    setShowPrinterModal(true);
+    if (soundEnabled) sounds.playPrinterSound();
+  };
+
+  // View slip from checker
+  const handleViewSlip = (table: Table) => {
+    if (!table.currentTransactionId) return;
+    const tx = activeTransactions[table.currentTransactionId];
+    if (!tx) return;
+
+    const tickets = generatePrintTickets({
+      transaction: tx,
+      batchItems: tx.allCurrentItems,
+      batchNumber: tx.batches.length,
+      type: 'order',
+    });
+    setPrinterModalTickets(tickets);
+    setShowPrinterModal(true);
+  };
+
+  return (
+    <div className="h-screen w-screen overflow-hidden clay-canvas text-slate-800 flex flex-col font-sans selection:bg-emerald-600 selection:text-white">
+      {/* Top POS Navbar */}
+      <Navbar
+        tables={tables}
+        activeTab={activeTab}
+        setActiveTab={(tab) => {
+          sounds.playTapSound();
+          setActiveTab(tab);
+          if (tab === 'sales') setShowSalesModal(true);
+          if (tab === 'printer') {
+            setPrinterModalTickets(allPrintTickets.slice(0, 6));
+            setShowPrinterModal(true);
+          }
+          if (tab === 'checker') {
+            setShowCheckerModal(true);
+          }
+        }}
+        soundEnabled={soundEnabled}
+        setSoundEnabled={setSoundEnabled}
+        onResetData={handleResetData}
+        recentTicketsCount={allPrintTickets.length}
+        lowStockAlertCount={rawMaterials.filter((m) => m.currentStock <= m.minStock).length}
+        activeKdsCount={countActiveKdsItems(activeTransactions)}
+        waiterPickupCount={countWaiterPickupItems(activeTransactions)}
+        paymentFlowMode={paymentFlowMode}
+      />
+
+      {/* Main Floor Plan Grid Interface */}
+      <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <FloorPlanGrid
+          tables={tables}
+          transactions={activeTransactions}
+          onSelectTable={() => {
+            sounds.playTapSound();
+          }}
+          onOpenOrder={(table) => {
+            sounds.playTapSound();
+            setOrderModalTable(table);
+          }}
+          onOpenPayment={(table) => {
+            sounds.playTapSound();
+            setPaymentModalTable(table);
+          }}
+          onOpenChecker={(table) => {
+            sounds.playTapSound();
+            setCheckerModalTableId(table.id);
+            setShowCheckerModal(true);
+          }}
+          onClearPaidTable={handleClearPaidTable}
+          onReprintPaidReceipt={handleReprintPaidReceipt}
+        />
+      </main>
+
+      {/* ORDER MODAL (Open Table or Add Order — Supports Payment Last & Payment First) */}
+      {orderModalTable && (
+        <OrderModal
+          table={orderModalTable}
+          existingTransaction={
+            orderModalTable.currentTransactionId
+              ? activeTransactions[orderModalTable.currentTransactionId]
+              : undefined
+          }
+          paymentFlowMode={paymentFlowMode}
+          onChangePaymentFlowMode={setPaymentFlowMode}
+          onClose={() => setOrderModalTable(null)}
+          onSubmitOrder={handleSubmitOrder}
+          onSubmitPaymentFirstOrder={handleSubmitPaymentFirstOrder}
+        />
+      )}
+
+      {/* PAYMENT & SETTLEMENT MODAL */}
+      {paymentModalTable && paymentModalTable.currentTransactionId && (
+        <PaymentModal
+          table={paymentModalTable}
+          transaction={activeTransactions[paymentModalTable.currentTransactionId]}
+          onClose={() => setPaymentModalTable(null)}
+          onCompleteSettlement={handleCompleteSettlement}
+        />
+      )}
+
+      {/* WAITER CHECKER MODAL (Pencontrengan saat antar makanan) */}
+      {showCheckerModal && (
+        <WaiterCheckerModal
+          tables={tables}
+          transactions={activeTransactions}
+          initialTableId={checkerModalTableId}
+          onClose={() => {
+            setShowCheckerModal(false);
+            setCheckerModalTableId(undefined);
+            if (activeTab === 'checker') setActiveTab('floor');
+          }}
+          onToggleItemServed={handleToggleItemServed}
+          onMarkAllServed={handleMarkAllServed}
+          onMarkHandedOffServed={handleMarkHandedOffServed}
+          onOpenKds={() => {
+            setShowCheckerModal(false);
+            setCheckerModalTableId(undefined);
+            setActiveTab('kds');
+          }}
+          onViewSlip={handleViewSlip}
+        />
+      )}
+
+      {/* KDS (Kitchen Display System) MODAL - RestoSync Feature */}
+      {activeTab === 'kds' && (
+        <KDSModal
+          transactions={activeTransactions}
+          onClose={() => setActiveTab('floor')}
+          onUpdateCookingStatus={handleUpdateCookingStatus}
+          onHandoffTicketToWaiter={handleHandoffTicketToWaiter}
+          onOpenWaiterChecker={(tableId) => {
+            setCheckerModalTableId(tableId);
+            setActiveTab('checker');
+            setShowCheckerModal(true);
+          }}
+        />
+      )}
+
+      {/* INVENTORY & RECIPE BOM MODAL - RestoSync Feature */}
+      {activeTab === 'inventory' && (
+        <InventoryModal
+          materials={rawMaterials}
+          onClose={() => setActiveTab('floor')}
+          onRestockMaterial={handleRestockMaterial}
+        />
+      )}
+
+      {/* PRINTER AUTO-ROUTING HUB MODAL */}
+      {showPrinterModal && (
+        <PrinterModal
+          tickets={
+            printerModalTickets.length > 0
+              ? printerModalTickets
+              : allPrintTickets.slice(0, 4)
+          }
+          onClose={() => {
+            setShowPrinterModal(false);
+            if (activeTab === 'printer') setActiveTab('floor');
+          }}
+          onToggleServed={(itemId) => {
+            // Find active transaction that has this item
+            const foundTx = Object.values(activeTransactions).find((tx) =>
+              tx.allCurrentItems.some((i) => i.id === itemId)
+            );
+            if (foundTx) {
+              handleToggleItemServed(foundTx.id, itemId);
+            }
+          }}
+        />
+      )}
+
+      {/* SALES & PB1 SUMMARY MODAL */}
+      {showSalesModal && (
+        <SalesSummaryModal
+          settledTransactions={settledTransactions}
+          onClose={() => {
+            setShowSalesModal(false);
+            if (activeTab === 'sales') setActiveTab('floor');
+          }}
+          onReprintReceipt={handleReprintReceipt}
+        />
+      )}
+
+      {/* CLAYMORPHISM RESET DEMO CONFIRMATION MODAL */}
+      {showResetConfirm && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/35 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowResetConfirm(false)}
+        >
+          <div
+            className="clay-modal p-6 sm:p-7 max-w-md w-full space-y-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <span className="text-xs font-extrabold uppercase tracking-wider text-amber-700 block">
+                Konfirmasi Sistem
+              </span>
+              <h3 className="text-xl font-black text-slate-900 mt-1">
+                Reset Data Operasional Demo?
+              </h3>
+              <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+                Seluruh status 36 meja, antrean pesanan aktif, stok bahan baku BOM, dan riwayat struk akan dikembalikan ke kondisi awal.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                className="clay-btn-neutral min-h-[48px] px-5 py-2.5 text-sm font-extrabold whitespace-nowrap cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmResetData}
+                className="clay-btn-rose min-h-[48px] px-5 py-2.5 text-sm font-extrabold whitespace-nowrap cursor-pointer"
+              >
+                Ya, Reset Data
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

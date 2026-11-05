@@ -1,0 +1,536 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  background-color: #e8eef5;
+  color: #0f172a;
+  font-family: var(--font-sans);
+}
+
+/* Tabular figures enforcement */
+.font-mono,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Clean minimal SaaS scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* =========================================================
+   MANGOMINT-INSPIRED CLEAN SAAS / POS DESIGN TOKENS
+   Palette matched to reference:
+   - Top Midnight Nav:      #14132B (Active tab surface: #232242, Active bar: #F4A261)
+   - Canvas Surface:        #FFFFFF (Subtle structural border: #E5E7EB)
+   - Active / Open Row:     #FDF3E7 (Warm cream highlight)
+   - Primary Pill CTA:      #B51F63 (Berry-magenta rounded-full)
+   - Action Grid Button:    #2B2D83 (Deep royal indigo rounded-[5px])
+   - Neutral Tag Surface:   #E4E9F2
+   ========================================================= */
+
+.mm-canvas {
+  background-color: #ffffff;
+  color: #14132b;
+}
+
+.mm-topnav {
+  background-color: #14132b;
+  color: #ffffff;
+}
+
+.mm-subbar {
+  background-color: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+/* Berry-Magenta Primary Pill Button ("NEW CHECKOUT" style) */
+.mm-pill-primary {
+  background-color: #b51f63;
+  color: #ffffff;
+  border-radius: 9999px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: transform 120ms ease;
+}
+.mm-pill-primary:hover:not(:disabled) {
+  background-color: #981852;
+}
+.mm-pill-primary:active:not(:disabled) {
+  transform: scale(0.985);
+}
+.mm-pill-primary:disabled {
+  background-color: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+/* Deep Royal Indigo Action Button ("FRONT DESK / CREDIT CARD / CASH" style) */
+.mm-btn-indigo {
+  background-color: #2b2d83;
+  color: #ffffff;
+  border-radius: 5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+.mm-btn-indigo:hover:not(:disabled) {
+  background-color: #212368;
+}
+.mm-btn-indigo:active:not(:disabled) {
+  transform: scale(0.985);
+}
+.mm-btn-indigo:disabled {
+  background-color: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+/* Selected / Active Berry Rectangular Button */
+.mm-btn-berry {
+  background-color: #b51f63;
+  color: #ffffff;
+  border-radius: 5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+.mm-btn-berry:hover:not(:disabled) {
+  background-color: #981852;
+}
+.mm-btn-berry:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+/* Clean Outline / Secondary Control Button */
+.mm-btn-outline {
+  background-color: #ffffff;
+  color: #14132b;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  font-weight: 600;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.mm-btn-outline:hover:not(:disabled) {
+  background-color: #f8fafc;
+  border-color: #9ca3af;
+}
+.mm-btn-outline:active:not(:disabled) {
+  background-color: #f1f5f9;
+}
+
+/* Clean Rectangular Input ("$0.00 / $150.00" bordered input style) */
+.mm-input {
+  background-color: #ffffff;
+  color: #14132b;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.mm-input::placeholder {
+  color: #9ca3af;
+}
+.mm-input:focus {
+  outline: none;
+  border-color: #2b2d83;
+  box-shadow: 0 0 0 2px rgba(43, 45, 131, 0.14);
+}
+
+/* Warm Cream Highlight Surface (Matches Open Sale Row #FDF3E7) */
+.mm-row-open {
+  background-color: #fdf3e7;
+}
+.mm-row-open:hover {
+  background-color: #faead7;
+}
+
+/* Floor Plan Table Cards — Clean Flat SaaS Surfaces */
+.mm-table-available {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  color: #14132b;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+.mm-table-available:hover {
+  border-color: #10b981;
+  background-color: #f8fafc;
+}
+.mm-table-available:active {
+  transform: scale(0.99);
+}
+
+.mm-table-occupied {
+  background-color: #fdf3e7;
+  border: 1px solid #f2d4b0;
+  border-radius: 8px;
+  color: #14132b;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+.mm-table-occupied:hover {
+  border-color: #e4a969;
+  background-color: #faead7;
+}
+.mm-table-occupied:active {
+  transform: scale(0.99);
+}
+
+/* Clean Flat Progress Bar (No inline styles needed) */
+.mm-progress {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background-color: #e5e7eb;
+}
+.mm-progress::-webkit-progress-bar {
+  background-color: #e5e7eb;
+  border-radius: 9999px;
+}
+.mm-progress::-webkit-progress-value {
+  background-color: #2b2d83;
+  border-radius: 9999px;
+  transition: width 200ms ease;
+}
+.mm-progress-complete::-webkit-progress-value {
+  background-color: #10b981;
+}
+.mm-progress::-moz-progress-bar {
+  background-color: #2b2d83;
+  border-radius: 9999px;
+}
+
+/* =========================================================
+   TACTILE CLAYMORPHISM DESIGN SYSTEM (.clay-*)
+   Deep Emerald ("Hijau Pekat") & Spacious Touch Controls
+   ========================================================= */
+
+.clay-canvas {
+  background-color: #e8eef5;
+  color: #0f172a;
+}
+
+.clay-bar {
+  background-color: #f8fafc;
+  border-bottom: 1px solid #d5dfec;
+  box-shadow:
+    0 6px 18px rgba(15, 23, 42, 0.06),
+    inset 0 2px 3px rgba(255, 255, 255, 0.95),
+    inset 0 -3px 6px rgba(148, 163, 184, 0.16);
+}
+
+.clay-panel {
+  background-color: #f8fafc;
+  border: 1px solid #dce5f0;
+  border-radius: 22px;
+  box-shadow:
+    0 12px 26px rgba(15, 23, 42, 0.07),
+    inset 0 2px 4px rgba(255, 255, 255, 0.95),
+    inset 0 -4px 7px rgba(148, 163, 184, 0.18);
+}
+
+.clay-well {
+  background-color: #dde5f0;
+  border-radius: 16px;
+  box-shadow:
+    inset 0 3px 7px rgba(15, 23, 42, 0.11),
+    inset 0 -2px 3px rgba(255, 255, 255, 0.85);
+}
+
+.clay-card {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  box-shadow:
+    0 10px 22px rgba(15, 23, 42, 0.065),
+    inset 0 2px 3px rgba(255, 255, 255, 0.98),
+    inset 0 -4px 6px rgba(148, 163, 184, 0.16);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.clay-card-sm {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow:
+    0 4px 10px rgba(15, 23, 42, 0.04),
+    inset 0 1px 2px rgba(255, 255, 255, 0.95);
+}
+
+.clay-modal {
+  background-color: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 24px;
+  box-shadow:
+    0 24px 48px rgba(15, 23, 42, 0.22),
+    inset 0 2px 4px rgba(255, 255, 255, 0.95);
+}
+
+.clay-input {
+  background-color: #ffffff;
+  color: #0f172a;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 14px;
+  box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.06);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.clay-input:focus {
+  outline: none;
+  border-color: #047857;
+  box-shadow:
+    inset 0 2px 4px rgba(15, 23, 42, 0.04),
+    0 0 0 3px rgba(4, 120, 87, 0.18);
+}
+
+/* Deep Emerald ("Hijau Pekat") Available Table Card */
+.clay-table-available {
+  background: linear-gradient(145deg, #059669 0%, #065f46 100%);
+  border: 1.5px solid #10b981;
+  border-radius: 20px;
+  color: #ffffff;
+  box-shadow:
+    0 10px 20px rgba(6, 95, 70, 0.26),
+    inset 0 3px 5px rgba(255, 255, 255, 0.28),
+    inset 0 -5px 8px rgba(2, 44, 34, 0.38);
+  transition: transform 140ms ease, filter 140ms ease;
+}
+.clay-table-available:hover {
+  filter: brightness(1.04);
+  transform: translateY(-2px);
+}
+.clay-table-available:active {
+  transform: scale(0.98);
+}
+
+/* Rich Crimson/Orange Occupied Table Card */
+.clay-table-occupied {
+  background: linear-gradient(145deg, #e11d48 0%, #9f1239 100%);
+  border: 1.5px solid #fb7185;
+  border-radius: 20px;
+  color: #ffffff;
+  box-shadow:
+    0 10px 20px rgba(159, 18, 57, 0.26),
+    inset 0 3px 5px rgba(255, 255, 255, 0.25),
+    inset 0 -5px 8px rgba(76, 5, 25, 0.4);
+  transition: transform 140ms ease, filter 140ms ease;
+}
+.clay-table-occupied:hover {
+  filter: brightness(1.04);
+  transform: translateY(-2px);
+}
+.clay-table-occupied:active {
+  transform: scale(0.98);
+}
+
+/* Tactile Clay Buttons */
+.clay-btn-emerald {
+  background: linear-gradient(145deg, #059669 0%, #047857 100%);
+  color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #10b981;
+  box-shadow:
+    0 6px 14px rgba(4, 120, 87, 0.26),
+    inset 0 2px 3px rgba(255, 255, 255, 0.28),
+    inset 0 -3px 5px rgba(2, 44, 34, 0.32);
+  transition: transform 120ms ease, filter 120ms ease;
+}
+.clay-btn-emerald:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.clay-btn-emerald:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.clay-btn-rose {
+  background: linear-gradient(145deg, #e11d48 0%, #be123c 100%);
+  color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #fb7185;
+  box-shadow:
+    0 6px 14px rgba(190, 18, 60, 0.26),
+    inset 0 2px 3px rgba(255, 255, 255, 0.26),
+    inset 0 -3px 5px rgba(76, 5, 25, 0.32);
+  transition: transform 120ms ease, filter 120ms ease;
+}
+.clay-btn-rose:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.clay-btn-rose:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.clay-btn-indigo {
+  background: linear-gradient(145deg, #4338ca 0%, #312e81 100%);
+  color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #6366f1;
+  box-shadow:
+    0 6px 14px rgba(49, 46, 129, 0.26),
+    inset 0 2px 3px rgba(255, 255, 255, 0.25),
+    inset 0 -3px 5px rgba(30, 27, 75, 0.35);
+  transition: transform 120ms ease, filter 120ms ease;
+}
+.clay-btn-indigo:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.clay-btn-indigo:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.clay-btn-amber {
+  background: linear-gradient(145deg, #d97706 0%, #b45309 100%);
+  color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #f59e0b;
+  box-shadow:
+    0 6px 14px rgba(180, 83, 9, 0.24),
+    inset 0 2px 3px rgba(255, 255, 255, 0.26),
+    inset 0 -3px 5px rgba(120, 53, 15, 0.32);
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+.clay-btn-cyan {
+  background: linear-gradient(145deg, #0284c7 0%, #0369a1 100%);
+  color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #38bdf8;
+  box-shadow:
+    0 6px 14px rgba(3, 105, 161, 0.24),
+    inset 0 2px 3px rgba(255, 255, 255, 0.26),
+    inset 0 -3px 5px rgba(12, 74, 110, 0.32);
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+.clay-btn-dark {
+  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+  color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #334155;
+  box-shadow:
+    0 6px 14px rgba(15, 23, 42, 0.22),
+    inset 0 2px 2px rgba(255, 255, 255, 0.16);
+  transition: transform 120ms ease;
+}
+
+.clay-btn-neutral {
+  background-color: #ffffff;
+  color: #1e293b;
+  border-radius: 14px;
+  border: 1px solid #cbd5e1;
+  box-shadow:
+    0 4px 10px rgba(15, 23, 42, 0.05),
+    inset 0 2px 2px rgba(255, 255, 255, 0.95),
+    inset 0 -2px 4px rgba(148, 163, 184, 0.16);
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+.clay-btn-neutral:hover:not(:disabled) {
+  background-color: #f8fafc;
+}
+.clay-btn-neutral:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.clay-btn-disabled {
+  background-color: #cbd5e1;
+  color: #64748b;
+  border-radius: 14px;
+  border: 1px solid #cbd5e1;
+}
+
+/* Tinted Action Surfaces */
+.clay-tint-emerald {
+  background-color: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 16px;
+  box-shadow:
+    0 4px 12px rgba(5, 150, 105, 0.07),
+    inset 0 2px 2px rgba(255, 255, 255, 0.85);
+}
+.clay-tint-amber {
+  background-color: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 16px;
+  box-shadow:
+    0 4px 12px rgba(217, 119, 6, 0.07),
+    inset 0 2px 2px rgba(255, 255, 255, 0.85);
+}
+.clay-tint-indigo {
+  background-color: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 16px;
+  box-shadow:
+    0 4px 12px rgba(67, 56, 202, 0.07),
+    inset 0 2px 2px rgba(255, 255, 255, 0.85);
+}
+.clay-tint-rose {
+  background-color: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 16px;
+  box-shadow:
+    0 4px 12px rgba(225, 29, 72, 0.07),
+    inset 0 2px 2px rgba(255, 255, 255, 0.85);
+}
+
+/* Tactile Claymorphism Progress Bar */
+.clay-progress {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 12px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background-color: #dde5f0;
+  box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.12);
+}
+.clay-progress::-webkit-progress-bar {
+  background-color: #dde5f0;
+  border-radius: 9999px;
+  box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.12);
+}
+.clay-progress::-webkit-progress-value {
+  background: linear-gradient(145deg, #4338ca 0%, #312e81 100%);
+  border-radius: 9999px;
+  transition: width 200ms ease;
+}
+.clay-progress-complete::-webkit-progress-value {
+  background: linear-gradient(145deg, #059669 0%, #047857 100%);
+}
+.clay-progress::-moz-progress-bar {
+  background: linear-gradient(145deg, #4338ca 0%, #312e81 100%);
+  border-radius: 9999px;
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}

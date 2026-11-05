@@ -1,0 +1,6 @@
+{
+  "name": "RestoPOS Touch - Table Management & Order Routing",
+  "description": "Sistem Kasir POS Restoran Layar Sentuh dengan Floor Plan Meja Interaktif, Auto-Routing Cetak Struk Dapur/Bar/Checker, Pencontrengan Waiter, dan Settlement PB1.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
