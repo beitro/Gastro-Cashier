@@ -1,3 +1,15 @@
+/**
+ * Kitchen Display System (KDS) UI for kitchen and bar production stations.
+ *
+ * Shows active preparation queues and handed-off history, filters by station,
+ * advances item status, and initiates handoff to the waiter/checker workflow.
+ * Transaction updates are delegated to parent callbacks; queue projections and
+ * status progression are provided by posCalculations.
+ *
+ * This component is a presentation/workflow surface, not a durable real-time
+ * messaging service. Multi-device LAN/cloud delivery belongs in the backend/
+ * local-network architecture.
+ */
 import React, { useState } from 'react';
 import { Transaction, OrderItem, CookingStatus } from '../types/pos';
 import {
