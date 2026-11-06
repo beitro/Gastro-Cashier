@@ -1,3 +1,18 @@
+/**
+ * Application composition root for the current POS demo.
+ *
+ * Responsibilities:
+ * - Owns top-level screen/modal state and coordinates POS workflows.
+ * - Loads and persists the demo's operational state through browser storage.
+ * - Connects feature components to shared POS calculation and transition helpers.
+ *
+ * Keep feature-specific presentation in components and reusable business rules in
+ * focused domain utilities. Persistence here is browser-local demo persistence,
+ * not a production database or a multi-device source of truth.
+ *
+ * Refactor boundary: extract use cases and persistence behind explicit interfaces
+ * before moving state ownership; preserve the existing event flow during that work.
+ */
 import React, { useState, useEffect } from 'react';
 import {
   Table,
