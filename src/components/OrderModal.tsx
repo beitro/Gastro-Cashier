@@ -1,3 +1,18 @@
+/**
+ * Order-entry feature UI for a restaurant table.
+ *
+ * Owns the current batch's local cart and order-composition interactions:
+ * guest/waiter selection, menu search/filtering, modifiers, notes, and quantity edits.
+ * Submits intent through typed callbacks; the parent currently coordinates the
+ * transaction state and persistence.
+ *
+ * Supports both Payment Last (send order, settle later) and the demo Payment First
+ * checkout path. Payment method selection here is UI workflow only; provider
+ * authorization/confirmation is not implemented in this component.
+ *
+ * Keep pricing rules in posCalculations and avoid making this modal the authority
+ * for persisted transaction or payment state.
+ */
 import React, { useState } from 'react';
 import {
   Table,
