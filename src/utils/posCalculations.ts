@@ -1,3 +1,20 @@
+/**
+ * POS domain calculation and workflow helpers.
+ *
+ * Current scope includes:
+ * - Item, discount, service-charge, tax, and settlement calculations.
+ * - Routing order items and creating kitchen/bar/checker/customer print tickets.
+ * - Recipe-based stock deduction and estimated menu HPP.
+ * - KDS queue filtering, status progression, waiter handoff, and queue counts.
+ *
+ * Most functions are deterministic transformations over the supplied data.
+ * Exceptions: ticket IDs and timestamps are generated here when callers do not
+ * supply them. This file currently spans several domains; split it by ownership
+ * (pricing, printing, inventory, kitchen) only after call sites and tests are mapped.
+ *
+ * Important: stock deduction clamps stock at zero and this helper does not create
+ * a durable inventory ledger. It is current demo behavior, not production stock control.
+ */
 import {
   OrderItem,
   PrintTicket,
