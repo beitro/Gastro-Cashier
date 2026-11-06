@@ -1,3 +1,19 @@
+/**
+ * Demo staff identity, role capabilities, and finance summary helpers.
+ *
+ * Responsibilities:
+ * - Supplies sample staff accounts used by the current demo login flow.
+ * - Matches demo PIN/NFC values against the supplied staff list.
+ * - Maps application roles to UI capability flags.
+ * - Calculates the finance dashboard's current summary metrics.
+ *
+ * Security boundary: the sample credentials and client-side checks in this module
+ * are not production authentication or authorization. Production access decisions
+ * must be enforced by a trusted backend; never treat these values as secrets.
+ *
+ * Note: finance calculations are colocated here today for compatibility, but belong
+ * in a finance domain module when the source organization is split.
+ */
 import { StaffAccount, UserRole, Transaction, PettyCashEntry } from '../types/pos';
 
 export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
