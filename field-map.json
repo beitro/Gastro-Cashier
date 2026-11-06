@@ -1,0 +1,25 @@
+{
+  "_comment": "Field di src/types/pos.ts yang tidak punya kolom sendiri karena diturunkan. Field yang punya kolom ditandai [src: ...] pada COMMENT di db/schema.sql.",
+  "derived": {
+    "Table.currentTransactionId": "view:v_table_board.current_transaction_number",
+    "Table.guestCount": "view:v_table_board.guest_count",
+    "Table.openedAt": "view:v_table_board.opened_at",
+    "Table.waiterName": "view:v_table_board.waiter_name",
+    "Transaction.isPaid": "view:v_transaction_summary.is_paid",
+    "PrintTicket.tableNumber": "column:transactions.table_number",
+    "PrintTicket.waiterName": "column:transactions.waiter_id"
+  },
+  "unusedAliases": {
+    "Destination": "Tipe 'kitchen' | 'bar' | 'checker' | 'cashier' tidak dipakai di mana pun di kode; tujuan item memakai union inline 'kitchen' | 'bar'."
+  },
+  "allowedTypeDifferences": {
+    "Transaction.paymentMethod": {
+      "tsOnly": ["split"],
+      "reason": "Nilai split ada di tipe tetapi tidak pernah dihasilkan UI; pembayaran terbagi dimodelkan sebagai beberapa baris payments."
+    }
+  },
+  "enumViaLookup": {
+    "StaffAccount.role": "roles.code",
+    "UserRole": "roles.code"
+  }
+}

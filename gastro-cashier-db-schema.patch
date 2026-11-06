@@ -1,0 +1,2700 @@
+From 2dab8077522c64c633d9071bf3f79f348efddc8b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 15:55:35 +0700
+Subject: [PATCH] feat(db): add PostgreSQL schema, ERD and data dictionary
+ reverse-engineered from the front-end
+
+The app keeps everything in localStorage (eight resto_pos_*_v1 keys). db/ holds the
+relational form of that data for a backend:
+
+- schema.sql: 19 tables, 8 views, calculation functions (discount, service charge, PB1,
+  per-batch stock deduction) and a table-status trigger. Every column that comes from a
+  TypeScript field is tagged [src: Interface.field] in its COMMENT.
+- ERD.md and DATA_DICTIONARY.md: generated from the live schema (Mermaid diagram,
+  relations, columns, CHECK rules, indexes) plus findings about code behaviour that
+  shaped the design, each with the source line.
+- seed.sql: generated from initialData.ts and authRoles.ts.
+- tests: 72 scenario checks, 272,190-case parity check of SQL vs posCalculations.ts,
+  and a coverage check that every field in src/types/pos.ts has a column or is derived.
+  Run everything with: bash db/tests/run.sh
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RYJJ4MwszsYyhrLbt7zF9N
+---
+ db/DATA_DICTIONARY.md      | 459 +++++++++++++++++++++++++++
+ db/ERD.md                  | 249 +++++++++++++++
+ db/README.md               |  45 +++
+ db/field-map.json          |  25 ++
+ db/schema.sql              | 616 +++++++++++++++++++++++++++++++++++++
+ db/seed.sql                | 153 +++++++++
+ db/tests/check-coverage.ts | 159 ++++++++++
+ db/tests/parity-gen.ts     |  62 ++++
+ db/tests/run.sh            |  39 +++
+ db/tests/scenarios.sql     | 319 +++++++++++++++++++
+ db/tools/generate-erd.ts   | 313 +++++++++++++++++++
+ db/tools/generate-seed.ts  | 137 +++++++++
+ 12 files changed, 2576 insertions(+)
+ create mode 100644 db/DATA_DICTIONARY.md
+ create mode 100644 db/ERD.md
+ create mode 100644 db/README.md
+ create mode 100644 db/field-map.json
+ create mode 100644 db/schema.sql
+ create mode 100644 db/seed.sql
+ create mode 100644 db/tests/check-coverage.ts
+ create mode 100644 db/tests/parity-gen.ts
+ create mode 100755 db/tests/run.sh
+ create mode 100644 db/tests/scenarios.sql
+ create mode 100644 db/tools/generate-erd.ts
+ create mode 100644 db/tools/generate-seed.ts
+
+diff --git a/db/DATA_DICTIONARY.md b/db/DATA_DICTIONARY.md
+new file mode 100644
+index 0000000..e282228
+--- /dev/null
++++ b/db/DATA_DICTIONARY.md
+@@ -0,0 +1,459 @@
++# Kamus Data Gastro-Cashier
++
++> Dibuat otomatis oleh `db/tools/generate-erd.ts` dari skema PostgreSQL dan COMMENT di `db/schema.sql`. Jangan diubah manual.
++
++Tag `[src: Antarmuka.field]` pada keterangan kolom menunjuk field TypeScript di `src/types/pos.ts` yang menjadi sumbernya. `db/tests/check-coverage.ts` memastikan setiap field di `pos.ts` punya kolom atau tercatat sebagai turunan di `db/field-map.json`.
++
++## Temuan perilaku kode yang mempengaruhi desain
++
++Hal-hal yang ditemukan saat membaca kode (commit d091435) dan menentukan bentuk skema. Setiap temuan sudah dicocokkan dengan baris kodenya.
++
++| # | Temuan | Bukti | Dampak pada skema |
++| --- | --- | --- | --- |
++| 1 | Semua data hanya di localStorage | src/App.tsx:41-48 (delapan kunci resto_pos_*_v1), pembacaan di baris 422-481, penulisan di 532-575. | Tidak ada backend; skema ini adalah bentuk server dari data tersebut. Tanpa server, dua kasir di dua perangkat tidak berbagi data. |
++| 2 | PIN staf tersimpan polos | src/utils/authRoles.ts:8, 17, 26 (pin: '9999', '1234', ...), diteruskan ke localStorage kunci resto_pos_staff_v1. | staff_accounts.pin_hash menyimpan HMAC-SHA256. Login memakai PIN saja tanpa id staf (authenticateByPin), maka pin_hash dibuat UNIQUE secara global. |
++| 3 | Nomor transaksi memakai angka acak 4 digit | src/App.tsx:654 (TRX-<tanggal>-<1000..9999>) dan 763 (TRX-PF-...). | Dapat bentrok pada hari ramai. transactions.number dibuat UNIQUE; backend perlu urutan harian, bukan angka acak. |
++| 4 | Payment First menulis dua record, kadang dengan id sama | src/App.tsx:763 membuat id lunas, dan App.tsx:833 (activeTxId = existingTx ? existingTx.id : settledTxId) memakainya lagi bila meja belum punya transaksi aktif. | Dimodelkan sebagai satu transactions dan banyak payments; payments.payment_number dipisah dari id transaksi. |
++| 5 | Nama kasir selalu "Budi Prasetyo" | src/App.tsx:795, 875, 1107 dan src/services/googleSheets.ts:54. | payments.cashier_id mengacu ke akun yang sedang login; kode asli tidak mencatat kasir sebenarnya. |
++| 6 | Stok bahan dijepit ke nol dan dibulatkan 2 desimal | src/utils/posCalculations.ts:262 (Math.max(0, Math.round(x * 100) / 100)). | Penjualan tidak pernah ditolak karena stok kurang, dan kekurangannya tidak tercatat. deduct_batch_stock mempertahankan perilaku ini tetapi mengembalikan kolom shortage; kolom disimpan 4 desimal. |
++| 7 | 5 dari 18 menu tidak punya resep | src/data/initialData.ts: bev-4, bev-5, bev-6, snack-3, dessert-1 tanpa recipe. | Penjualannya tidak memotong stok. recipe_ingredients tidak memaksa setiap menu punya resep. |
++| 8 | Stok porsi menu hanya tampilan | src/components/OrderModal.tsx:810 menampilkan item.stock; tidak ada pengurangan di kode. | menu_items.portion_stock disimpan apa adanya; stok nyata ada di raw_materials. |
++| 9 | Status dan metode yang ada di tipe tetapi tidak pernah dihasilkan | Table.status 'reserved' dan 'billing', Transaction.status 'cancelled', paymentMethod 'split': tidak ada pengisi di src selain src/types/pos.ts. | Tetap dimasukkan ke CHECK agar sama dengan tipe, kecuali "split" yang diganti banyak baris payments. |
++| 10 | Harga satuan dikirim dari klien | src/components/OrderModal.tsx:142 dan 188 menyalin menuItem.price ke OrderItem.unitPrice di klien. | transaction_items.unit_price harus diisi server dari menu_items.price; view v_integrity_item_subtotal mendeteksi selisih. |
++| 11 | Data contoh memakai modifier yang tidak ada di menu | src/App.tsx:88 dan 135 (grup 'Es Batu'). | transaction_item_modifiers menyimpan nama grup dan opsi sebagai teks (bukan id) agar riwayat tetap utuh. |
++
++## Tabel
++
++### dining_tables
++
++Denah meja (36 meja di initialData.ts). Field runtime Table.currentTransactionId, guestCount, openedAt, waiterName tidak disimpan di sini; lihat view v_table_board.
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | VARCHAR(10) | tidak |  |  | Contoh: T01. [src: Table.id] |
++| table_number | VARCHAR(20) | tidak |  |  | Contoh: 01 atau VIP-1. [src: Table.tableNumber] |
++| area | VARCHAR(10) | tidak |  |  | [src: Table.area] |
++| capacity | SMALLINT | tidak |  |  | [src: Table.capacity] |
++| status | VARCHAR(10) | tidak | 'available'::character varying |  | available dan occupied dijaga trigger dari transaksi aktif. reserved dan billing ada di tipe TableStatus tetapi tidak pernah diisi oleh kode (belum ada fitur reservasi). [src: Table.status] |
++
++Aturan dan indeks:
++
++- `dining_tables_area_check`: `CHECK (((area)::text = ANY ((ARRAY['indoor'::character varying, 'outdoor'::character varying, 'vip'::character varying])::text[])))`
++- `dining_tables_capacity_check`: `CHECK ((capacity > 0))`
++- `dining_tables_status_check`: `CHECK (((status)::text = ANY ((ARRAY['available'::character varying, 'occupied'::character varying, 'reserved'::character varying, 'billing'::character varying])::text[])))`
++- `dining_tables_table_number_key`: `UNIQUE (table_number)`
++
++### discount_rules
++
++Aturan diskon dari computeDiscountAmount(): member10 = 10% dari subtotal; promo20k = Rp20.000 dibatasi subtotal. DiscountType "none" berarti tanpa aturan (NULL di payments). [src: DiscountType]
++
++Kunci utama: `code`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| code | VARCHAR(20) | tidak |  |  |  |
++| name | VARCHAR(80) | tidak |  |  |  |
++| kind | VARCHAR(10) | tidak |  |  |  |
++| value | NUMERIC(14,2) | tidak |  |  |  |
++
++Aturan dan indeks:
++
++- `chk_discount_percent`: `CHECK ((((kind)::text = 'FIXED'::text) OR (value <= (100)::numeric)))`
++- `discount_rules_kind_check`: `CHECK (((kind)::text = ANY ((ARRAY['PERCENT'::character varying, 'FIXED'::character varying])::text[])))`
++- `discount_rules_value_check`: `CHECK ((value > (0)::numeric))`
++
++### menu_items
++
++Katalog menu (18 baris di initialData.ts). [src: MenuItem.modifierGroups, MenuItem.recipe] disimpan di modifier_groups dan recipe_ingredients.
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | VARCHAR(40) | tidak |  |  | Contoh: food-1, bev-1. [src: MenuItem.id] |
++| name | VARCHAR(150) | tidak |  |  | [src: MenuItem.name] |
++| category | VARCHAR(10) | tidak |  |  | [src: MenuItem.category] |
++| destination | VARCHAR(10) | tidak |  |  | Rute cetak otomatis: kitchen atau bar (routeOrderItems). [src: MenuItem.destination] |
++| price | NUMERIC(14,2) | tidak |  |  | [src: MenuItem.price] |
++| cost | NUMERIC(14,2) | tidak |  |  | HPP per porsi, dipakai calculateOrderHPP. [src: MenuItem.cost] |
++| portion_stock | INTEGER | tidak | 0 |  | Hanya ditampilkan ("Stok 50") di OrderModal; tidak pernah dikurangi oleh kode. [src: MenuItem.stock] |
++| image_url | TEXT | ya |  |  | [src: MenuItem.image] |
++| description | TEXT | ya |  |  | [src: MenuItem.description] |
++
++Aturan dan indeks:
++
++- `menu_items_category_check`: `CHECK (((category)::text = ANY ((ARRAY['makanan'::character varying, 'minuman'::character varying, 'snack'::character varying, 'dessert'::character varying])::text[])))`
++- `menu_items_cost_check`: `CHECK ((cost >= (0)::numeric))`
++- `menu_items_destination_check`: `CHECK (((destination)::text = ANY ((ARRAY['kitchen'::character varying, 'bar'::character varying])::text[])))`
++- `menu_items_portion_stock_check`: `CHECK ((portion_stock >= 0))`
++- `menu_items_price_check`: `CHECK ((price >= (0)::numeric))`
++- `idx_menu_items_category`: `menu_items USING btree (category)`
++
++### modifier_groups
++
++Grup pilihan per menu (level pedas, pilihan telur). [src: MenuItem.modifierGroups]
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | BIGINT | tidak | identity |  |  |
++| menu_item_id | VARCHAR(40) | tidak |  | menu_items(id) |  |
++| code | VARCHAR(40) | tidak |  |  | Contoh: pedas-1. [src: ModifierGroup.id] |
++| name | VARCHAR(100) | tidak |  |  | [src: ModifierGroup.name] |
++| is_required | BOOLEAN | tidak | false |  | [src: ModifierGroup.required] |
++| sort_order | SMALLINT | tidak | 0 |  |  |
++
++Aturan dan indeks:
++
++- `uq_modifier_group_code`: `UNIQUE (menu_item_id, code)`
++
++### modifier_options
++
++Opsi dalam grup. [src: ModifierGroup.options]
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | BIGINT | tidak | identity |  |  |
++| group_id | BIGINT | tidak |  | modifier_groups(id) |  |
++| name | VARCHAR(100) | tidak |  |  | Nama dapat memuat harga ("Sangat Pedas (+Rp 2.000)"); harga sebenarnya di price_delta. [src: ModifierOption.name] |
++| price_delta | NUMERIC(14,2) | tidak | 0 |  | [src: ModifierOption.priceDelta] |
++| sort_order | SMALLINT | tidak | 0 |  |  |
++
++Aturan dan indeks:
++
++- `uq_modifier_option_name`: `UNIQUE (group_id, name)`
++
++### payments
++
++Satu baris per pelunasan (setiap record "settled" di kode). Satu transaksi bisa punya banyak pembayaran: Payment First melunasi batch tertentu di depan, sisanya dilunasi saat pelanggan selesai. Pendapatan = SUM(total_amount).
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | UUID | tidak | gen_random_uuid() |  |  |
++| payment_number | VARCHAR(50) | tidak |  |  | Nomor bukti bayar. Kode memakai ulang id transaksi; pada Payment First di meja yang belum punya transaksi aktif, record aktif dan record lunas bahkan memakai id yang sama (App.tsx: activeTxId = settledTxId). Backend harus menerbitkan nomor unik. |
++| transaction_id | UUID | tidak |  | transactions(id) |  |
++| flow | VARCHAR(15) | tidak |  |  | payment_first = dibayar saat memesan; payment_last = dibayar saat selesai. |
++| method | VARCHAR(10) | tidak |  |  | Nilai split pada tipe Transaction.paymentMethod tidak pernah dihasilkan UI; pembayaran terbagi dimodelkan sebagai beberapa baris. [src: Transaction.paymentMethod] |
++| card_bank | VARCHAR(40) | ya |  |  | Pilihan bank EDC di layar bayar (default BCA EDC); di kode hanya state UI dan hilang setelah bayar. |
++| discount_rule_code | VARCHAR(20) | ya |  | discount_rules(code) | Jenis diskon yang dipilih; kode hanya menyimpan nominalnya. |
++| subtotal_amount | NUMERIC(14,2) | tidak |  |  | Jumlah subtotal item yang dilunasi pada pembayaran ini. [src: Transaction.subtotal] |
++| discount_amount | NUMERIC(14,2) | tidak | 0 |  | [src: Transaction.discountAmount] |
++| service_charge_amount | NUMERIC(14,2) | tidak | 0 |  | [src: Transaction.serviceChargeAmount] |
++| tax_amount | NUMERIC(14,2) | tidak | 0 |  | PB1. [src: Transaction.taxAmount] |
++| total_amount | NUMERIC(14,2) | tidak |  |  | [src: Transaction.totalAmount] |
++| cash_given | NUMERIC(14,2) | tidak |  |  | Untuk non-tunai kode mengisi sama dengan total. [src: Transaction.cashGiven] |
++| change_amount | NUMERIC(14,2) | tidak | 0 |  | [src: Transaction.changeAmount] |
++| cashier_id | VARCHAR(40) | tidak |  | staff_accounts(id) | Kode menulis cashierName tetap "Budi Prasetyo" untuk semua pembayaran, bukan staf yang sedang login. [src: Transaction.cashierName] |
++| paid_at | TIMESTAMPTZ | tidak | now() |  | [src: Transaction.paidAt] |
++
++Aturan dan indeks:
++
++- `chk_payment_card_bank`: `CHECK ((((method)::text = 'card'::text) OR (card_bank IS NULL)))`
++- `chk_payment_cash`: `CHECK (((((method)::text = 'cash'::text) AND (cash_given >= total_amount) AND (change_amount = (cash_given - total_amount))) OR (((method)::text <> 'cash'::text) AND (cash_given = total_amount) AND (change_amount = (0)::numeric))))`
++- `chk_payment_discount_le_subtotal`: `CHECK ((discount_amount <= subtotal_amount))`
++- `chk_payment_total`: `CHECK ((total_amount = (((subtotal_amount - discount_amount) + service_charge_amount) + tax_amount)))`
++- `payments_cash_given_check`: `CHECK ((cash_given >= (0)::numeric))`
++- `payments_change_amount_check`: `CHECK ((change_amount >= (0)::numeric))`
++- `payments_discount_amount_check`: `CHECK ((discount_amount >= (0)::numeric))`
++- `payments_flow_check`: `CHECK (((flow)::text = ANY ((ARRAY['payment_last'::character varying, 'payment_first'::character varying])::text[])))`
++- `payments_method_check`: `CHECK (((method)::text = ANY ((ARRAY['cash'::character varying, 'qris'::character varying, 'card'::character varying])::text[])))`
++- `payments_service_charge_amount_check`: `CHECK ((service_charge_amount >= (0)::numeric))`
++- `payments_subtotal_amount_check`: `CHECK ((subtotal_amount >= (0)::numeric))`
++- `payments_tax_amount_check`: `CHECK ((tax_amount >= (0)::numeric))`
++- `payments_total_amount_check`: `CHECK ((total_amount >= (0)::numeric))`
++- `payments_payment_number_key`: `UNIQUE (payment_number)`
++- `idx_payments_paid_at`: `payments USING btree (paid_at DESC)`
++- `idx_payments_transaction`: `payments USING btree (transaction_id)`
++
++### petty_cash_entries
++
++Pengeluaran kas kecil (FinanceView). Kode boleh menghapus entri; di backend sebaiknya dibatalkan, bukan dihapus.
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | UUID | tidak | gen_random_uuid() |  | [src: PettyCashEntry.id] |
++| occurred_at | TIMESTAMPTZ | tidak | now() |  | [src: PettyCashEntry.timestamp] |
++| description | VARCHAR(200) | tidak |  |  | [src: PettyCashEntry.description] |
++| category | VARCHAR(20) | tidak |  |  | [src: PettyCashEntry.category] |
++| amount | NUMERIC(14,2) | tidak |  |  | [src: PettyCashEntry.amount] |
++| receipt_number | VARCHAR(40) | ya |  |  | [src: PettyCashEntry.receiptNumber] |
++| recorded_by | VARCHAR(40) | tidak |  | staff_accounts(id) | Kode menyimpan nama staf sebagai teks. [src: PettyCashEntry.recordedBy] |
++
++Aturan dan indeks:
++
++- `petty_cash_entries_amount_check`: `CHECK ((amount > (0)::numeric))`
++- `petty_cash_entries_category_check`: `CHECK (((category)::text = ANY ((ARRAY['operasional'::character varying, 'bahan_darurat'::character varying, 'utilitas'::character varying, 'lainnya'::character varying])::text[])))`
++- `idx_petty_cash_occurred_at`: `petty_cash_entries USING btree (occurred_at DESC)`
++
++### print_tickets
++
++Riwayat cetak: struk dapur, bar, checker per batch, dan struk pembayaran. Isi tiket diturunkan, bukan disalin: dapur/bar = item batch dengan destination yang sama, checker = semua item batch, receipt = item yang dilunasi payment_id. Kode menyimpan salinan item di tiket sehingga status dilayani harus diperbarui di dua tempat. [src: PrintTicket.items, PrintTicket.financials]
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | UUID | tidak | gen_random_uuid() |  |  |
++| ticket_number | VARCHAR(60) | tidak |  |  | Contoh: TKT-DAPUR-<ms>-<batch>, RCP-<ms>. [src: PrintTicket.id] |
++| transaction_id | UUID | tidak |  | transaction_batches(transaction_id, batch_number); transactions(id) | [src: PrintTicket.transactionId] |
++| batch_number | SMALLINT | ya |  | transaction_batches(transaction_id, batch_number) | [src: PrintTicket.batchNumber] |
++| type | VARCHAR(10) | tidak |  |  | [src: PrintTicket.type] |
++| payment_flow | VARCHAR(15) | ya |  |  | [src: PrintTicket.paymentFlow] |
++| payment_id | UUID | ya |  | payments(id) |  |
++| notes | TEXT | ya |  |  | [src: PrintTicket.notes] |
++| printed_at | TIMESTAMPTZ | tidak | now() |  | [src: PrintTicket.timestamp] |
++
++Aturan dan indeks:
++
++- `chk_ticket_receipt_has_payment`: `CHECK ((((type)::text = 'receipt'::text) = (payment_id IS NOT NULL)))`
++- `print_tickets_payment_flow_check`: `CHECK (((payment_flow)::text = ANY ((ARRAY['payment_last'::character varying, 'payment_first'::character varying])::text[])))`
++- `print_tickets_type_check`: `CHECK (((type)::text = ANY ((ARRAY['kitchen'::character varying, 'bar'::character varying, 'checker'::character varying, 'receipt'::character varying])::text[])))`
++- `print_tickets_ticket_number_key`: `UNIQUE (ticket_number)`
++- `idx_print_tickets_transaction`: `print_tickets USING btree (transaction_id, printed_at DESC)`
++
++### raw_materials
++
++Bahan baku (14 baris di initialData.ts). Tanpa batch, tanpa buku besar mutasi: kode langsung menimpa currentStock.
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | VARCHAR(40) | tidak |  |  | Contoh: raw-beras. [src: RawMaterial.id] |
++| name | VARCHAR(150) | tidak |  |  | [src: RawMaterial.name] |
++| unit | VARCHAR(20) | tidak |  | units(code) | [src: RawMaterial.unit] |
++| current_stock | NUMERIC(14,4) | tidak | 0 |  | Kode menjepit ke 0 (Math.max(0, ...)) sehingga penjualan melebihi stok tidak terdeteksi. [src: RawMaterial.currentStock] |
++| min_stock | NUMERIC(14,4) | tidak | 0 |  | Batas ROP; stok dianggap rendah bila current_stock <= min_stock. [src: RawMaterial.minStock] |
++| cost_per_unit | NUMERIC(14,2) | tidak | 0 |  | [src: RawMaterial.costPerUnit] |
++| storage_zone | VARCHAR(20) | tidak |  |  | [src: RawMaterial.storageZone] |
++
++Aturan dan indeks:
++
++- `raw_materials_cost_per_unit_check`: `CHECK ((cost_per_unit >= (0)::numeric))`
++- `raw_materials_current_stock_check`: `CHECK ((current_stock >= (0)::numeric))`
++- `raw_materials_min_stock_check`: `CHECK ((min_stock >= (0)::numeric))`
++- `raw_materials_storage_zone_check`: `CHECK (((storage_zone)::text = ANY ((ARRAY['Dry Storage'::character varying, 'Walk-in Chiller'::character varying, 'Deep Freezer'::character varying, 'Bar Station'::character varying])::text[])))`
++
++### recipe_ingredients
++
++Resep (BOM) per 1 porsi. Jumlah dalam satuan raw_materials.unit (0.015 untuk teh dalam kg = 15 gram); 5 dari 18 menu belum punya resep (bev-4, bev-5, bev-6, snack-3, dessert-1), sehingga penjualannya tidak memotong stok. [src: MenuItem.recipe]
++
++Kunci utama: `menu_item_id`, `raw_material_id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| menu_item_id | VARCHAR(40) | tidak |  | menu_items(id) |  |
++| raw_material_id | VARCHAR(40) | tidak |  | raw_materials(id) | [src: RecipeIngredient.rawMaterialId] |
++| amount | NUMERIC(14,4) | tidak |  |  | [src: RecipeIngredient.amount] |
++
++Aturan dan indeks:
++
++- `recipe_ingredients_amount_check`: `CHECK ((amount > (0)::numeric))`
++- `idx_recipe_ingredients_material`: `recipe_ingredients USING btree (raw_material_id)`
++
++### restaurant_settings
++
++Satu baris: identitas di header struk (ThermalReceipt.tsx), tarif PB1 dan service charge (posCalculations.ts), dan mode alur bayar yang dipilih kasir. [src: PaymentFlowMode]
++
++Kunci utama: `singleton`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| singleton | BOOLEAN | tidak | true |  |  |
++| restaurant_name | VARCHAR(120) | tidak |  |  |  |
++| address | VARCHAR(200) | tidak |  |  |  |
++| npwpd | VARCHAR(40) | tidak |  |  |  |
++| service_charge_rate | NUMERIC(5,4) | tidak | 0.0500 |  |  |
++| pb1_rate | NUMERIC(5,4) | tidak | 0.1000 |  |  |
++| service_in_pb1_base | BOOLEAN | tidak | true |  | TRUE = PB1 dihitung dari (subtotal - diskon + service charge), sesuai calculateOrderTotals. Wajib dicek dengan perda daerah target. |
++| payment_flow_mode | VARCHAR(15) | tidak | 'payment_last'::character varying |  | Mode bayar default di layar order; tersimpan di localStorage kunci resto_pos_payment_mode_v1. |
++| updated_at | TIMESTAMPTZ | tidak | now() |  |  |
++
++Aturan dan indeks:
++
++- `restaurant_settings_payment_flow_mode_check`: `CHECK (((payment_flow_mode)::text = ANY ((ARRAY['payment_last'::character varying, 'payment_first'::character varying])::text[])))`
++- `restaurant_settings_pb1_rate_check`: `CHECK (((pb1_rate >= (0)::numeric) AND (pb1_rate <= 0.1000)))`
++- `restaurant_settings_service_charge_rate_check`: `CHECK (((service_charge_rate >= (0)::numeric) AND (service_charge_rate <= (1)::numeric)))`
++- `restaurant_settings_singleton_check`: `CHECK (singleton)`
++
++### roles
++
++Matriks izin per peran, dari getRolePermissions() di authRoles.ts. [src: UserRole]
++
++Kunci utama: `code`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| code | VARCHAR(10) | tidak |  |  |  |
++| can_operate_pos | BOOLEAN | tidak |  |  |  |
++| can_access_kds | BOOLEAN | tidak |  |  |  |
++| can_access_checker | BOOLEAN | tidak |  |  |  |
++| can_access_inventory | BOOLEAN | tidak |  |  |  |
++| can_access_finance | BOOLEAN | tidak |  |  |  |
++| can_access_owner_dashboard | BOOLEAN | tidak |  |  |  |
++| can_manage_petty_cash | BOOLEAN | tidak |  |  |  |
++| can_reset_demo | BOOLEAN | tidak |  |  |  |
++
++Aturan dan indeks:
++
++- `roles_code_check`: `CHECK (((code)::text = ANY ((ARRAY['owner'::character varying, 'cashier'::character varying, 'finance'::character varying])::text[])))`
++
++### staff_accounts
++
++Akun login kasir/owner/finance. Login memakai PIN saja (authenticateByPin tidak menerima id staf), maka PIN harus unik global.
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | VARCHAR(40) | tidak |  |  | Contoh: staff-owner-01. [src: StaffAccount.id] |
++| name | VARCHAR(100) | tidak |  |  | [src: StaffAccount.name] |
++| role | VARCHAR(10) | tidak |  | roles(code) | [src: StaffAccount.role] |
++| pin_hash | CHAR(64) | tidak |  |  | HMAC-SHA256 heksadesimal dari PIN dengan pepper sisi server. Kode saat ini menyimpan PIN polos di localStorage dan di bundel JS. [src: StaffAccount.pin] |
++| nfc_tag_uid | VARCHAR(40) | tidak |  |  | Huruf besar; authenticateByNfc membandingkan setelah toUpperCase. [src: StaffAccount.nfcTagUid] |
++| avatar_color | VARCHAR(40) | tidak |  |  | Kelas Tailwind (bg-amber-500); detail tampilan yang ikut tersimpan di kode. [src: StaffAccount.avatarColor] |
++| role_label | VARCHAR(60) | tidak |  |  | Label per akun, bukan per peran. [src: StaffAccount.roleLabel] |
++
++Aturan dan indeks:
++
++- `staff_accounts_nfc_tag_uid_check`: `CHECK (((nfc_tag_uid)::text = upper((nfc_tag_uid)::text)))`
++- `staff_accounts_nfc_tag_uid_key`: `UNIQUE (nfc_tag_uid)`
++- `staff_accounts_pin_hash_key`: `UNIQUE (pin_hash)`
++
++### transaction_batches
++
++Gelombang pesanan "Pesanan ke-N" pada satu meja; tiap batch dicetak ke dapur/bar/checker. [src: Transaction.batches]
++
++Kunci utama: `transaction_id`, `batch_number`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| transaction_id | UUID | tidak |  | transactions(id) |  |
++| batch_number | SMALLINT | tidak |  |  | [src: OrderBatch.batchNumber] |
++| sent_at | TIMESTAMPTZ | tidak | now() |  | [src: OrderBatch.timestamp] |
++
++Aturan dan indeks:
++
++- `transaction_batches_batch_number_check`: `CHECK ((batch_number >= 1))`
++
++### transaction_item_modifiers
++
++Pilihan modifier pada item, disalin berdasarkan nama (bukan id) sehingga tetap utuh bila menu diubah. Data contoh di App.tsx memakai grup "Es Batu" yang tidak ada di menu. [src: OrderItem.selectedModifiers]
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | BIGINT | tidak | identity |  |  |
++| transaction_item_id | UUID | tidak |  | transaction_items(id) |  |
++| group_name | VARCHAR(100) | tidak |  |  | [src: SelectedModifier.groupName] |
++| option_name | VARCHAR(100) | tidak |  |  | [src: SelectedModifier.optionName] |
++| price_delta | NUMERIC(14,2) | tidak | 0 |  | [src: SelectedModifier.priceDelta] |
++
++Aturan dan indeks:
++
++- `idx_item_modifiers_item`: `transaction_item_modifiers USING btree (transaction_item_id)`
++
++### transaction_items
++
++Baris pesanan. Nama, kategori, tujuan, dan harga disalin dari menu saat dipesan. [src: Transaction.allCurrentItems, OrderBatch.items]
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | UUID | tidak | gen_random_uuid() |  | [src: OrderItem.id] |
++| transaction_id | UUID | tidak |  | transaction_batches(transaction_id, batch_number) |  |
++| batch_number | SMALLINT | tidak |  | transaction_batches(transaction_id, batch_number) | [src: OrderItem.batchNumber] |
++| menu_item_id | VARCHAR(40) | tidak |  | menu_items(id) | [src: OrderItem.menuItemId] |
++| name | VARCHAR(150) | tidak |  |  | Salinan. [src: OrderItem.name] |
++| category | VARCHAR(10) | tidak |  |  | Salinan. [src: OrderItem.category] |
++| destination | VARCHAR(10) | tidak |  |  | Salinan. [src: OrderItem.destination] |
++| unit_price | NUMERIC(14,2) | tidak |  |  | Harga satuan di klien lalu disalin ke transaksi (celah yang sama dengan blueprint Gastro-Knowledge): backend harus mengambil dari menu_items. [src: OrderItem.unitPrice] |
++| quantity | INTEGER | tidak |  |  | [src: OrderItem.quantity] |
++| notes | TEXT | tidak | ''::text |  | [src: OrderItem.notes] |
++| subtotal | NUMERIC(14,2) | tidak |  |  | (unit_price + jumlah price_delta modifier) x quantity. [src: OrderItem.subtotal] |
++| is_served | BOOLEAN | tidak | false |  | Centang pramusaji saat makanan sampai di meja. [src: OrderItem.isServed] |
++| served_at | TIMESTAMPTZ | ya |  |  | [src: OrderItem.servedAt] |
++| cooking_status | VARCHAR(10) | tidak | 'queue'::character varying |  | Status KDS: queue, cooking, ready, handed_off. Kode menganggap undefined sebagai queue. [src: OrderItem.cookingStatus] |
++| handed_off_at | TIMESTAMPTZ | ya |  |  | [src: OrderItem.handedOffAt] |
++| payment_id | UUID | ya |  | payments(id) | NULL = belum dibayar. Menggantikan flag OrderItem.isPaid dan menunjuk pembayaran yang melunasi item ini. [src: OrderItem.isPaid] |
++
++Aturan dan indeks:
++
++- `transaction_items_category_check`: `CHECK (((category)::text = ANY ((ARRAY['makanan'::character varying, 'minuman'::character varying, 'snack'::character varying, 'dessert'::character varying])::text[])))`
++- `transaction_items_cooking_status_check`: `CHECK (((cooking_status)::text = ANY ((ARRAY['queue'::character varying, 'cooking'::character varying, 'ready'::character varying, 'handed_off'::character varying])::text[])))`
++- `transaction_items_destination_check`: `CHECK (((destination)::text = ANY ((ARRAY['kitchen'::character varying, 'bar'::character varying])::text[])))`
++- `transaction_items_quantity_check`: `CHECK ((quantity >= 1))`
++- `transaction_items_subtotal_check`: `CHECK ((subtotal >= (0)::numeric))`
++- `transaction_items_unit_price_check`: `CHECK ((unit_price >= (0)::numeric))`
++- `idx_transaction_items_kds`: `transaction_items USING btree (destination, cooking_status) WHERE (is_served = false)`
++- `idx_transaction_items_payment`: `transaction_items USING btree (payment_id) WHERE (payment_id IS NOT NULL)`
++- `idx_transaction_items_transaction`: `transaction_items USING btree (transaction_id, batch_number)`
++
++### transactions
++
++Satu kunjungan/bill per meja. Total uang tidak disimpan di sini: kode menimpa total transaksi setiap ada batch atau pelunasan, sehingga totalnya diturunkan dari item dan payments (view v_transaction_summary).
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | UUID | tidak | gen_random_uuid() |  |  |
++| number | VARCHAR(40) | tidak |  |  | Contoh: TRX-20261023-4821, TRX-PF-... Kode membuatnya dengan angka acak 4 digit sehingga bisa bentrok; backend wajib memakai urutan. [src: Transaction.id] |
++| table_id | VARCHAR(10) | tidak |  | dining_tables(id) | [src: Transaction.tableId] |
++| table_number | VARCHAR(20) | tidak |  |  | Salinan nomor meja saat transaksi dibuat (dicetak di struk). [src: Transaction.tableNumber] |
++| area | VARCHAR(10) | tidak |  |  | Salinan area meja saat transaksi dibuat. [src: Transaction.area] |
++| guest_count | SMALLINT | tidak |  |  | [src: Transaction.guestCount] |
++| waiter_id | SMALLINT | tidak |  | waiters(id) | Kode menyimpan nama pramusaji sebagai teks. [src: Transaction.waiterName] |
++| opened_at | TIMESTAMPTZ | tidak | now() |  | Waktu meja dibuka. KDS menghitung lama masak dari kolom ini, bukan dari waktu batch dikirim. [src: Transaction.openedAt] |
++| status | VARCHAR(10) | tidak | 'active'::character varying |  | cancelled ada di tipe tetapi tidak pernah diisi oleh kode (belum ada fitur batal/void). [src: Transaction.status] |
++| payment_flow | VARCHAR(15) | ya |  |  | Alur bayar terakhir pada transaksi ini. [src: Transaction.paymentFlow] |
++| service_charge_rate | NUMERIC(5,4) | tidak | 0.0500 |  | Salinan tarif saat transaksi dibuat. [src: Transaction.serviceChargeRate] |
++| tax_rate | NUMERIC(5,4) | tidak | 0.1000 |  | Salinan tarif PB1 saat transaksi dibuat. [src: Transaction.taxRate] |
++
++Aturan dan indeks:
++
++- `transactions_area_check`: `CHECK (((area)::text = ANY ((ARRAY['indoor'::character varying, 'outdoor'::character varying, 'vip'::character varying])::text[])))`
++- `transactions_guest_count_check`: `CHECK ((guest_count > 0))`
++- `transactions_payment_flow_check`: `CHECK (((payment_flow)::text = ANY ((ARRAY['payment_last'::character varying, 'payment_first'::character varying])::text[])))`
++- `transactions_status_check`: `CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'settled'::character varying, 'cancelled'::character varying])::text[])))`
++- `transactions_number_key`: `UNIQUE (number)`
++- `idx_transactions_opened_at`: `transactions USING btree (opened_at DESC)`
++- `uq_transactions_one_active_per_table`: `UNIQUE transactions USING btree (table_id) WHERE ((status)::text = 'active'::text)`
++
++### units
++
++Satuan bahan baku. Komentar RawMaterial.unit hanya menyebut kg, gram, liter, ml, butir, ekor, ikat; data awal juga memakai porsi, sisir, blok. Konversi antar satuan tidak ada di kode.
++
++Kunci utama: `code`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| code | VARCHAR(20) | tidak |  |  |  |
++| label | VARCHAR(40) | ya |  |  |  |
++
++### waiters
++
++Pramusaji. Daftar pilihan di OrderModal.tsx (4 nama) terpisah dari akun login; satu orang (Budi Prasetyo) ada di keduanya, maka staff_id opsional.
++
++Kunci utama: `id`
++
++| Kolom | Tipe | Null | Default | Relasi | Keterangan |
++| --- | --- | --- | --- | --- | --- |
++| id | SMALLINT | tidak | identity |  |  |
++| name | VARCHAR(100) | tidak |  |  |  |
++| staff_id | VARCHAR(40) | ya |  | staff_accounts(id) |  |
++
++Aturan dan indeks:
++
++- `waiters_name_key`: `UNIQUE (name)`
+diff --git a/db/ERD.md b/db/ERD.md
+new file mode 100644
+index 0000000..b80d028
+--- /dev/null
++++ b/db/ERD.md
+@@ -0,0 +1,249 @@
++# ERD Gastro-Cashier (RestoPOS Touch)
++
++> Dibuat otomatis oleh `db/tools/generate-erd.ts` dari skema yang dimuat ke PostgreSQL. Jangan diubah manual; ubah `db/schema.sql` lalu jalankan `db/tests/run.sh`.
++
++Aplikasi saat ini hanya front-end (data di localStorage). Skema ini adalah bentuk relasional dari data itu: **19 tabel**, **21 relasi**, **8 view**.
++
++Notasi: `||` tepat satu, `|o` nol atau satu, `o{` nol atau banyak. Ujung induk ada di kiri. Kolom hanya diberi tanda PK, FK, UK; tipe lengkap, default, dan CHECK ada di [DATA_DICTIONARY.md](DATA_DICTIONARY.md).
++
++```mermaid
++erDiagram
++    dining_tables {
++        varchar id PK
++        varchar table_number UK
++        varchar area
++        smallint capacity
++        varchar status
++    }
++    discount_rules {
++        varchar code PK
++        varchar name
++        varchar kind
++        numeric value
++    }
++    menu_items {
++        varchar id PK
++        varchar name
++        varchar category
++        varchar destination
++        numeric price
++        numeric cost
++        integer portion_stock
++        text image_url
++        text description
++    }
++    modifier_groups {
++        bigint id PK
++        varchar menu_item_id FK
++        varchar code
++        varchar name
++        boolean is_required
++        smallint sort_order
++    }
++    modifier_options {
++        bigint id PK
++        bigint group_id FK
++        varchar name
++        numeric price_delta
++        smallint sort_order
++    }
++    payments {
++        uuid id PK
++        varchar payment_number UK
++        uuid transaction_id FK
++        varchar flow
++        varchar method
++        varchar card_bank
++        varchar discount_rule_code FK
++        numeric subtotal_amount
++        numeric discount_amount
++        numeric service_charge_amount
++        numeric tax_amount
++        numeric total_amount
++        numeric cash_given
++        numeric change_amount
++        varchar cashier_id FK
++        timestamptz paid_at
++    }
++    petty_cash_entries {
++        uuid id PK
++        timestamptz occurred_at
++        varchar description
++        varchar category
++        numeric amount
++        varchar receipt_number
++        varchar recorded_by FK
++    }
++    print_tickets {
++        uuid id PK
++        varchar ticket_number UK
++        uuid transaction_id FK
++        smallint batch_number FK
++        varchar type
++        varchar payment_flow
++        uuid payment_id FK
++        text notes
++        timestamptz printed_at
++    }
++    raw_materials {
++        varchar id PK
++        varchar name
++        varchar unit FK
++        numeric current_stock
++        numeric min_stock
++        numeric cost_per_unit
++        varchar storage_zone
++    }
++    recipe_ingredients {
++        varchar menu_item_id PK,FK
++        varchar raw_material_id PK,FK
++        numeric amount
++    }
++    restaurant_settings {
++        boolean singleton PK
++        varchar restaurant_name
++        varchar address
++        varchar npwpd
++        numeric service_charge_rate
++        numeric pb1_rate
++        boolean service_in_pb1_base
++        varchar payment_flow_mode
++        timestamptz updated_at
++    }
++    roles {
++        varchar code PK
++        boolean can_operate_pos
++        boolean can_access_kds
++        boolean can_access_checker
++        boolean can_access_inventory
++        boolean can_access_finance
++        boolean can_access_owner_dashboard
++        boolean can_manage_petty_cash
++        boolean can_reset_demo
++    }
++    staff_accounts {
++        varchar id PK
++        varchar name
++        varchar role FK
++        char pin_hash UK
++        varchar nfc_tag_uid UK
++        varchar avatar_color
++        varchar role_label
++    }
++    transaction_batches {
++        uuid transaction_id PK,FK
++        smallint batch_number PK
++        timestamptz sent_at
++    }
++    transaction_item_modifiers {
++        bigint id PK
++        uuid transaction_item_id FK
++        varchar group_name
++        varchar option_name
++        numeric price_delta
++    }
++    transaction_items {
++        uuid id PK
++        uuid transaction_id FK
++        smallint batch_number FK
++        varchar menu_item_id FK
++        varchar name
++        varchar category
++        varchar destination
++        numeric unit_price
++        integer quantity
++        text notes
++        numeric subtotal
++        boolean is_served
++        timestamptz served_at
++        varchar cooking_status
++        timestamptz handed_off_at
++        uuid payment_id FK
++    }
++    transactions {
++        uuid id PK
++        varchar number UK
++        varchar table_id FK
++        varchar table_number
++        varchar area
++        smallint guest_count
++        smallint waiter_id FK
++        timestamptz opened_at
++        varchar status
++        varchar payment_flow
++        numeric service_charge_rate
++        numeric tax_rate
++    }
++    units {
++        varchar code PK
++        varchar label
++    }
++    waiters {
++        smallint id PK
++        varchar name UK
++        varchar staff_id FK
++    }
++
++    menu_items ||--o{ modifier_groups : "menu_item_id"
++    modifier_groups ||--o{ modifier_options : "group_id"
++    staff_accounts ||--o{ payments : "cashier_id"
++    discount_rules |o--o{ payments : "discount_rule_code"
++    transactions ||--o{ payments : "transaction_id"
++    staff_accounts ||--o{ petty_cash_entries : "recorded_by"
++    transaction_batches |o--o{ print_tickets : "transaction_id+batch_number"
++    payments |o--o{ print_tickets : "payment_id"
++    transactions ||--o{ print_tickets : "transaction_id"
++    units ||--o{ raw_materials : "unit"
++    menu_items ||--o{ recipe_ingredients : "menu_item_id"
++    raw_materials ||--o{ recipe_ingredients : "raw_material_id"
++    roles ||--o{ staff_accounts : "role"
++    transactions ||--o{ transaction_batches : "transaction_id"
++    transaction_items ||--o{ transaction_item_modifiers : "transaction_item_id"
++    transaction_batches ||--o{ transaction_items : "transaction_id+batch_number"
++    menu_items ||--o{ transaction_items : "menu_item_id"
++    payments |o--o{ transaction_items : "payment_id"
++    dining_tables ||--o{ transactions : "table_id"
++    waiters ||--o{ transactions : "waiter_id"
++    staff_accounts |o--o{ waiters : "staff_id"
++```
++
++## Daftar relasi
++
++| Induk | Anak | Kolom FK | Kardinalitas (induk : anak) | ON DELETE |
++| --- | --- | --- | --- | --- |
++| menu_items (id) | modifier_groups | menu_item_id | 1 : 0..N | CASCADE |
++| modifier_groups (id) | modifier_options | group_id | 1 : 0..N | CASCADE |
++| staff_accounts (id) | payments | cashier_id | 1 : 0..N | NO ACTION |
++| discount_rules (code) | payments | discount_rule_code | 0..1 : 0..N | NO ACTION |
++| transactions (id) | payments | transaction_id | 1 : 0..N | NO ACTION |
++| staff_accounts (id) | petty_cash_entries | recorded_by | 1 : 0..N | NO ACTION |
++| transaction_batches (transaction_id, batch_number) | print_tickets | transaction_id, batch_number | 0..1 : 0..N | NO ACTION |
++| payments (id) | print_tickets | payment_id | 0..1 : 0..N | NO ACTION |
++| transactions (id) | print_tickets | transaction_id | 1 : 0..N | CASCADE |
++| units (code) | raw_materials | unit | 1 : 0..N | NO ACTION |
++| menu_items (id) | recipe_ingredients | menu_item_id | 1 : 0..N | CASCADE |
++| raw_materials (id) | recipe_ingredients | raw_material_id | 1 : 0..N | RESTRICT |
++| roles (code) | staff_accounts | role | 1 : 0..N | NO ACTION |
++| transactions (id) | transaction_batches | transaction_id | 1 : 0..N | CASCADE |
++| transaction_items (id) | transaction_item_modifiers | transaction_item_id | 1 : 0..N | CASCADE |
++| transaction_batches (transaction_id, batch_number) | transaction_items | transaction_id, batch_number | 1 : 0..N | CASCADE |
++| menu_items (id) | transaction_items | menu_item_id | 1 : 0..N | NO ACTION |
++| payments (id) | transaction_items | payment_id | 0..1 : 0..N | NO ACTION |
++| dining_tables (id) | transactions | table_id | 1 : 0..N | NO ACTION |
++| waiters (id) | transactions | waiter_id | 1 : 0..N | NO ACTION |
++| staff_accounts (id) | waiters | staff_id | 0..1 : 0..N | NO ACTION |
++
++## View turunan
++
++Field di `src/types/pos.ts` yang sengaja tidak disimpan sebagai kolom karena bisa dihitung.
++
++| View | Fungsi |
++| --- | --- |
++| v_daily_settlement | Rekap harian: omzet, service charge, PB1, diskon, rincian per metode bayar (calculateFinanceMetrics). |
++| v_integrity_item_subtotal | Pemeriksaan: subtotal item harus sama dengan (harga + modifier) x jumlah. Harus kosong. |
++| v_integrity_payment | Pemeriksaan: subtotal, diskon, service charge, dan PB1 pada pembayaran harus sama dengan hitung ulang. Harus kosong. |
++| v_kds_active_items | Antrean KDS: item yang belum dilayani dan belum diserahkan ke pramusaji (isKdsItemActive). |
++| v_stock_status | Status stok dan nilai aset per bahan baku (buildInventorySheetRows). |
++| v_table_board | Field runtime Table (currentTransactionId, guestCount, openedAt, waiterName) dan status meja beserta bill aktifnya. |
++| v_transaction_summary | Transaction.isPaid, subtotal item, jumlah dibayar dan sisa tagihan per transaksi. |
++| v_waiter_pickup_items | Item yang sudah selesai di KDS dan menunggu dicentang pramusaji (isItemWaitingForWaiter). |
+diff --git a/db/README.md b/db/README.md
+new file mode 100644
+index 0000000..e763c08
+--- /dev/null
++++ b/db/README.md
+@@ -0,0 +1,45 @@
++# Skema database Gastro-Cashier (RestoPOS Touch)
++
++Hasil reverse engineering dari kode front-end pada commit `d091435`. Aplikasi saat ini menyimpan semuanya di `localStorage` (delapan kunci `resto_pos_*_v1`); folder ini memuat bentuk relasionalnya untuk backend PostgreSQL.
++
++| File | Isi |
++| --- | --- |
++| `schema.sql` | DDL PostgreSQL 15+: 19 tabel, 8 view, fungsi hitung (diskon, service charge, PB1, potong stok per batch), trigger status meja. Setiap kolom dari field TypeScript diberi tag `[src: Antarmuka.field]` di COMMENT. |
++| `ERD.md` | Diagram ERD (Mermaid, tampil langsung di GitHub) dan daftar relasi. Dibuat otomatis. |
++| `DATA_DICTIONARY.md` | Temuan perilaku kode yang mempengaruhi desain, lalu kamus kolom, aturan CHECK, dan indeks tiap tabel. Dibuat otomatis. |
++| `seed.sql` | Data master dari kode: 36 meja, 14 bahan baku, 18 menu beserta modifier dan resep, 3 akun staf, peran, aturan diskon. Dibuat otomatis oleh `tools/generate-seed.ts`. |
++| `field-map.json` | Field `pos.ts` yang sengaja tidak punya kolom (diturunkan lewat view) dan perbedaan tipe yang diizinkan. |
++| `tests/` | `run.sh` menjalankan semuanya; `scenarios.sql` (skenario kasir), `parity-gen.ts` (hitungan SQL lawan TypeScript), `check-coverage.ts` (cakupan field). |
++| `tools/` | `generate-seed.ts`, `generate-erd.ts`. |
++
++## Menjalankan pengujian
++
++Butuh PostgreSQL 15 atau lebih baru (`psql` di PATH, koneksi lewat variabel `PG*`) dan [bun](https://bun.sh).
++
++```bash
++bash db/tests/run.sh
++```
++
++Skrip ini menghapus dan membuat ulang database `gc_test` (ubah dengan `GC_TEST_DB`), memuat skema dan seed, lalu memeriksa:
++
++1. seed sama persis dengan keluaran generator dari data di kode;
++2. skenario kasir: bayar belakang, bayar depan dengan beberapa batch, dua pembayaran pada satu bill, status meja, antrean KDS dan pramusaji, potong stok, serta penolakan data yang tidak valid;
++3. paritas hitungan: untuk 90.730 nilai subtotal dan tiga jenis diskon, fungsi SQL menghasilkan angka yang sama dengan `posCalculations.ts`;
++4. setiap field di `src/types/pos.ts` punya kolom atau tercatat sebagai turunan, dan setiap nilai enum sama dengan CHECK di skema;
++5. `ERD.md` dan `DATA_DICTIONARY.md` sama dengan hasil generator dari skema saat ini.
++
++Setelah mengubah `schema.sql`, muat ke database uji lalu jalankan `bun db/tools/generate-erd.ts` untuk memperbarui dua dokumen itu. Jika `run.sh` menampilkan "sudah usang", file sudah dibuat ulang; periksa dan commit.
++
++## Keputusan desain
++
++- **Uang** memakai `NUMERIC(14,2)`; kode membulatkan ke Rupiah penuh dengan `Math.round`, dan fungsi SQL meniru pembulatannya.
++- **Data master** memakai id teks dari kode (`T01`, `raw-beras`, `food-1`) agar seed apa adanya. Entitas yang dibuat saat berjalan memakai UUID, dan nomor cetak (`TRX-...`, `TKT-...`) disimpan di kolom terpisah.
++- **Total transaksi tidak disimpan** di `transactions`: kode menimpa total setiap ada batch atau pelunasan. Uang tercatat di `payments` (satu baris per pelunasan), dan sisa tagihan diturunkan lewat `v_transaction_summary`.
++- **Status bayar item** adalah `transaction_items.payment_id` (NULL = belum dibayar), menggantikan flag `isPaid` dan menunjuk pembayaran yang melunasinya.
++- **Satu meja, satu transaksi aktif** dijaga indeks unik parsial; status meja `available` / `occupied` mengikuti transaksi lewat trigger.
++- **PIN** disimpan sebagai HMAC-SHA256 dengan pepper dari server. Pepper di `seed.sql` hanya untuk demo.
++- **Tarif PB1 dan service charge** ada di `restaurant_settings` dan disalin ke tiap transaksi. Opsi `service_in_pb1_base` (default TRUE) mengikuti `calculateOrderTotals` di kode: PB1 dihitung dari subtotal setelah diskon ditambah service charge. Cek ke perda daerah target sebelum dipakai di klien.
++
++## Yang sengaja belum ada
++
++Kode belum punya fitur ini, jadi skema tidak mengarangnya: shift kasir dan Z-Report, void atau pembatalan transaksi, reservasi meja, multi-outlet, batch stok dan tanggal kedaluwarsa, supplier dan PO, riwayat mutasi stok, dan pembayaran terbagi per item. Beberapa di antaranya sudah ada di blueprint `Gastro-Knowledge` (batch FEFO, PO, buku besar stok). Bila kedua repo disatukan, perbedaan yang perlu diselesaikan: id bahan (`raw-beras` lawan SKU `RAW-BERAS-01`), model stok (satu angka lawan batch), dan model pesanan (`transactions` dengan batch lawan `orders`).
+diff --git a/db/field-map.json b/db/field-map.json
+new file mode 100644
+index 0000000..5e47ebf
+--- /dev/null
++++ b/db/field-map.json
+@@ -0,0 +1,25 @@
++{
++  "_comment": "Field di src/types/pos.ts yang tidak punya kolom sendiri karena diturunkan. Field yang punya kolom ditandai [src: ...] pada COMMENT di db/schema.sql.",
++  "derived": {
++    "Table.currentTransactionId": "view:v_table_board.current_transaction_number",
++    "Table.guestCount": "view:v_table_board.guest_count",
++    "Table.openedAt": "view:v_table_board.opened_at",
++    "Table.waiterName": "view:v_table_board.waiter_name",
++    "Transaction.isPaid": "view:v_transaction_summary.is_paid",
++    "PrintTicket.tableNumber": "column:transactions.table_number",
++    "PrintTicket.waiterName": "column:transactions.waiter_id"
++  },
++  "unusedAliases": {
++    "Destination": "Tipe 'kitchen' | 'bar' | 'checker' | 'cashier' tidak dipakai di mana pun di kode; tujuan item memakai union inline 'kitchen' | 'bar'."
++  },
++  "allowedTypeDifferences": {
++    "Transaction.paymentMethod": {
++      "tsOnly": ["split"],
++      "reason": "Nilai split ada di tipe tetapi tidak pernah dihasilkan UI; pembayaran terbagi dimodelkan sebagai beberapa baris payments."
++    }
++  },
++  "enumViaLookup": {
++    "StaffAccount.role": "roles.code",
++    "UserRole": "roles.code"
++  }
++}
+diff --git a/db/schema.sql b/db/schema.sql
+new file mode 100644
+index 0000000..fcce108
+--- /dev/null
++++ b/db/schema.sql
+@@ -0,0 +1,616 @@
++-- ============================================================================
++-- RESTOPOS TOUCH (GASTRO-CASHIER) - SKEMA POSTGRESQL HASIL REVERSE ENGINEERING
++-- Sumber: src/types/pos.ts, src/data/initialData.ts, src/utils/posCalculations.ts,
++--         src/utils/authRoles.ts, src/App.tsx, src/components/*.tsx (commit d091435)
++--
++-- Aplikasi saat ini hanya front-end: seluruh data disimpan di localStorage
++-- (delapan kunci resto_pos_*_v1). Skema ini adalah bentuk relasional dari data itu.
++--
++-- Konvensi:
++--   * Uang dalam Rupiah: NUMERIC(14,2). Kode membulatkan dengan Math.round ke Rupiah penuh.
++--   * Data master memakai id teks dari kode ('T01', 'raw-beras', 'food-1') agar seed
++--     dari initialData.ts dapat dimuat apa adanya. Entitas runtime memakai UUID,
++--     nomor yang tercetak (TRX-..., TKT-...) disimpan di kolom number terpisah.
++--   * Setiap kolom yang berasal dari field TypeScript diberi tag [src: Antarmuka.field]
++--     pada COMMENT-nya; db/tests memeriksa bahwa seluruh field di pos.ts terpetakan.
++--   * Temuan perilaku kode yang mempengaruhi desain: lihat db/DATA_DICTIONARY.md.
++-- ============================================================================
++
++-- ============================================================================
++-- 1. KONFIGURASI DAN DATA ACUAN
++-- ============================================================================
++
++CREATE TABLE restaurant_settings (
++    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
++    restaurant_name VARCHAR(120) NOT NULL,
++    address VARCHAR(200) NOT NULL,
++    npwpd VARCHAR(40) NOT NULL,
++    service_charge_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0500 CHECK (service_charge_rate >= 0 AND service_charge_rate <= 1),
++    pb1_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.1000 CHECK (pb1_rate >= 0 AND pb1_rate <= 0.1000),
++    service_in_pb1_base BOOLEAN NOT NULL DEFAULT TRUE,
++    payment_flow_mode VARCHAR(15) NOT NULL DEFAULT 'payment_last'
++        CHECK (payment_flow_mode IN ('payment_last', 'payment_first')),
++    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
++);
++COMMENT ON TABLE restaurant_settings IS 'Satu baris: identitas di header struk (ThermalReceipt.tsx), tarif PB1 dan service charge (posCalculations.ts), dan mode alur bayar yang dipilih kasir. [src: PaymentFlowMode]';
++COMMENT ON COLUMN restaurant_settings.payment_flow_mode IS 'Mode bayar default di layar order; tersimpan di localStorage kunci resto_pos_payment_mode_v1.';
++COMMENT ON COLUMN restaurant_settings.service_in_pb1_base IS 'TRUE = PB1 dihitung dari (subtotal - diskon + service charge), sesuai calculateOrderTotals. Wajib dicek dengan perda daerah target.';
++
++CREATE TABLE units (
++    code VARCHAR(20) PRIMARY KEY,
++    label VARCHAR(40)
++);
++COMMENT ON TABLE units IS 'Satuan bahan baku. Komentar RawMaterial.unit hanya menyebut kg, gram, liter, ml, butir, ekor, ikat; data awal juga memakai porsi, sisir, blok. Konversi antar satuan tidak ada di kode.';
++
++CREATE TABLE roles (
++    code VARCHAR(10) PRIMARY KEY CHECK (code IN ('owner', 'cashier', 'finance')),
++    can_operate_pos BOOLEAN NOT NULL,
++    can_access_kds BOOLEAN NOT NULL,
++    can_access_checker BOOLEAN NOT NULL,
++    can_access_inventory BOOLEAN NOT NULL,
++    can_access_finance BOOLEAN NOT NULL,
++    can_access_owner_dashboard BOOLEAN NOT NULL,
++    can_manage_petty_cash BOOLEAN NOT NULL,
++    can_reset_demo BOOLEAN NOT NULL
++);
++COMMENT ON TABLE roles IS 'Matriks izin per peran, dari getRolePermissions() di authRoles.ts. [src: UserRole]';
++
++CREATE TABLE staff_accounts (
++    id VARCHAR(40) PRIMARY KEY,
++    name VARCHAR(100) NOT NULL,
++    role VARCHAR(10) NOT NULL REFERENCES roles(code),
++    pin_hash CHAR(64) NOT NULL UNIQUE,
++    nfc_tag_uid VARCHAR(40) NOT NULL UNIQUE CHECK (nfc_tag_uid = UPPER(nfc_tag_uid)),
++    avatar_color VARCHAR(40) NOT NULL,
++    role_label VARCHAR(60) NOT NULL
++);
++COMMENT ON TABLE staff_accounts IS 'Akun login kasir/owner/finance. Login memakai PIN saja (authenticateByPin tidak menerima id staf), maka PIN harus unik global.';
++COMMENT ON COLUMN staff_accounts.id IS 'Contoh: staff-owner-01. [src: StaffAccount.id]';
++COMMENT ON COLUMN staff_accounts.name IS '[src: StaffAccount.name]';
++COMMENT ON COLUMN staff_accounts.role IS '[src: StaffAccount.role]';
++COMMENT ON COLUMN staff_accounts.pin_hash IS 'HMAC-SHA256 heksadesimal dari PIN dengan pepper sisi server. Kode saat ini menyimpan PIN polos di localStorage dan di bundel JS. [src: StaffAccount.pin]';
++COMMENT ON COLUMN staff_accounts.nfc_tag_uid IS 'Huruf besar; authenticateByNfc membandingkan setelah toUpperCase. [src: StaffAccount.nfcTagUid]';
++COMMENT ON COLUMN staff_accounts.avatar_color IS 'Kelas Tailwind (bg-amber-500); detail tampilan yang ikut tersimpan di kode. [src: StaffAccount.avatarColor]';
++COMMENT ON COLUMN staff_accounts.role_label IS 'Label per akun, bukan per peran. [src: StaffAccount.roleLabel]';
++
++CREATE TABLE waiters (
++    id SMALLINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
++    name VARCHAR(100) NOT NULL UNIQUE,
++    staff_id VARCHAR(40) REFERENCES staff_accounts(id)
++);
++COMMENT ON TABLE waiters IS 'Pramusaji. Daftar pilihan di OrderModal.tsx (4 nama) terpisah dari akun login; satu orang (Budi Prasetyo) ada di keduanya, maka staff_id opsional.';
++
++-- ============================================================================
++-- 2. DENAH MEJA
++-- ============================================================================
++
++CREATE TABLE dining_tables (
++    id VARCHAR(10) PRIMARY KEY,
++    table_number VARCHAR(20) NOT NULL UNIQUE,
++    area VARCHAR(10) NOT NULL CHECK (area IN ('indoor', 'outdoor', 'vip')),
++    capacity SMALLINT NOT NULL CHECK (capacity > 0),
++    status VARCHAR(10) NOT NULL DEFAULT 'available'
++        CHECK (status IN ('available', 'occupied', 'reserved', 'billing'))
++);
++COMMENT ON TABLE dining_tables IS 'Denah meja (36 meja di initialData.ts). Field runtime Table.currentTransactionId, guestCount, openedAt, waiterName tidak disimpan di sini; lihat view v_table_board.';
++COMMENT ON COLUMN dining_tables.id IS 'Contoh: T01. [src: Table.id]';
++COMMENT ON COLUMN dining_tables.table_number IS 'Contoh: 01 atau VIP-1. [src: Table.tableNumber]';
++COMMENT ON COLUMN dining_tables.area IS '[src: Table.area]';
++COMMENT ON COLUMN dining_tables.capacity IS '[src: Table.capacity]';
++COMMENT ON COLUMN dining_tables.status IS 'available dan occupied dijaga trigger dari transaksi aktif. reserved dan billing ada di tipe TableStatus tetapi tidak pernah diisi oleh kode (belum ada fitur reservasi). [src: Table.status]';
++
++-- ============================================================================
++-- 3. BAHAN BAKU, MENU, MODIFIER, RESEP
++-- ============================================================================
++
++CREATE TABLE raw_materials (
++    id VARCHAR(40) PRIMARY KEY,
++    name VARCHAR(150) NOT NULL,
++    unit VARCHAR(20) NOT NULL REFERENCES units(code),
++    current_stock NUMERIC(14, 4) NOT NULL DEFAULT 0 CHECK (current_stock >= 0),
++    min_stock NUMERIC(14, 4) NOT NULL DEFAULT 0 CHECK (min_stock >= 0),
++    cost_per_unit NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (cost_per_unit >= 0),
++    storage_zone VARCHAR(20) NOT NULL
++        CHECK (storage_zone IN ('Dry Storage', 'Walk-in Chiller', 'Deep Freezer', 'Bar Station'))
++);
++COMMENT ON TABLE raw_materials IS 'Bahan baku (14 baris di initialData.ts). Tanpa batch, tanpa buku besar mutasi: kode langsung menimpa currentStock.';
++COMMENT ON COLUMN raw_materials.id IS 'Contoh: raw-beras. [src: RawMaterial.id]';
++COMMENT ON COLUMN raw_materials.name IS '[src: RawMaterial.name]';
++COMMENT ON COLUMN raw_materials.unit IS '[src: RawMaterial.unit]';
++COMMENT ON COLUMN raw_materials.current_stock IS 'Kode menjepit ke 0 (Math.max(0, ...)) sehingga penjualan melebihi stok tidak terdeteksi. [src: RawMaterial.currentStock]';
++COMMENT ON COLUMN raw_materials.min_stock IS 'Batas ROP; stok dianggap rendah bila current_stock <= min_stock. [src: RawMaterial.minStock]';
++COMMENT ON COLUMN raw_materials.cost_per_unit IS '[src: RawMaterial.costPerUnit]';
++COMMENT ON COLUMN raw_materials.storage_zone IS '[src: RawMaterial.storageZone]';
++
++CREATE TABLE menu_items (
++    id VARCHAR(40) PRIMARY KEY,
++    name VARCHAR(150) NOT NULL,
++    category VARCHAR(10) NOT NULL CHECK (category IN ('makanan', 'minuman', 'snack', 'dessert')),
++    destination VARCHAR(10) NOT NULL CHECK (destination IN ('kitchen', 'bar')),
++    price NUMERIC(14, 2) NOT NULL CHECK (price >= 0),
++    cost NUMERIC(14, 2) NOT NULL CHECK (cost >= 0),
++    portion_stock INTEGER NOT NULL DEFAULT 0 CHECK (portion_stock >= 0),
++    image_url TEXT,
++    description TEXT
++);
++COMMENT ON TABLE menu_items IS 'Katalog menu (18 baris di initialData.ts). [src: MenuItem.modifierGroups, MenuItem.recipe] disimpan di modifier_groups dan recipe_ingredients.';
++COMMENT ON COLUMN menu_items.id IS 'Contoh: food-1, bev-1. [src: MenuItem.id]';
++COMMENT ON COLUMN menu_items.name IS '[src: MenuItem.name]';
++COMMENT ON COLUMN menu_items.category IS '[src: MenuItem.category]';
++COMMENT ON COLUMN menu_items.destination IS 'Rute cetak otomatis: kitchen atau bar (routeOrderItems). [src: MenuItem.destination]';
++COMMENT ON COLUMN menu_items.price IS '[src: MenuItem.price]';
++COMMENT ON COLUMN menu_items.cost IS 'HPP per porsi, dipakai calculateOrderHPP. [src: MenuItem.cost]';
++COMMENT ON COLUMN menu_items.portion_stock IS 'Hanya ditampilkan ("Stok 50") di OrderModal; tidak pernah dikurangi oleh kode. [src: MenuItem.stock]';
++COMMENT ON COLUMN menu_items.image_url IS '[src: MenuItem.image]';
++COMMENT ON COLUMN menu_items.description IS '[src: MenuItem.description]';
++
++CREATE INDEX idx_menu_items_category ON menu_items(category);
++
++CREATE TABLE modifier_groups (
++    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
++    menu_item_id VARCHAR(40) NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
++    code VARCHAR(40) NOT NULL,
++    name VARCHAR(100) NOT NULL,
++    is_required BOOLEAN NOT NULL DEFAULT FALSE,
++    sort_order SMALLINT NOT NULL DEFAULT 0,
++    CONSTRAINT uq_modifier_group_code UNIQUE (menu_item_id, code)
++);
++COMMENT ON TABLE modifier_groups IS 'Grup pilihan per menu (level pedas, pilihan telur). [src: MenuItem.modifierGroups]';
++COMMENT ON COLUMN modifier_groups.code IS 'Contoh: pedas-1. [src: ModifierGroup.id]';
++COMMENT ON COLUMN modifier_groups.name IS '[src: ModifierGroup.name]';
++COMMENT ON COLUMN modifier_groups.is_required IS '[src: ModifierGroup.required]';
++
++CREATE TABLE modifier_options (
++    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
++    group_id BIGINT NOT NULL REFERENCES modifier_groups(id) ON DELETE CASCADE,
++    name VARCHAR(100) NOT NULL,
++    price_delta NUMERIC(14, 2) NOT NULL DEFAULT 0,
++    sort_order SMALLINT NOT NULL DEFAULT 0,
++    CONSTRAINT uq_modifier_option_name UNIQUE (group_id, name)
++);
++COMMENT ON TABLE modifier_options IS 'Opsi dalam grup. [src: ModifierGroup.options]';
++COMMENT ON COLUMN modifier_options.name IS 'Nama dapat memuat harga ("Sangat Pedas (+Rp 2.000)"); harga sebenarnya di price_delta. [src: ModifierOption.name]';
++COMMENT ON COLUMN modifier_options.price_delta IS '[src: ModifierOption.priceDelta]';
++
++CREATE TABLE recipe_ingredients (
++    menu_item_id VARCHAR(40) NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
++    raw_material_id VARCHAR(40) NOT NULL REFERENCES raw_materials(id) ON DELETE RESTRICT,
++    amount NUMERIC(14, 4) NOT NULL CHECK (amount > 0),
++    PRIMARY KEY (menu_item_id, raw_material_id)
++);
++COMMENT ON TABLE recipe_ingredients IS 'Resep (BOM) per 1 porsi. Jumlah dalam satuan raw_materials.unit (0.015 untuk teh dalam kg = 15 gram); 5 dari 18 menu belum punya resep (bev-4, bev-5, bev-6, snack-3, dessert-1), sehingga penjualannya tidak memotong stok. [src: MenuItem.recipe]';
++COMMENT ON COLUMN recipe_ingredients.raw_material_id IS '[src: RecipeIngredient.rawMaterialId]';
++COMMENT ON COLUMN recipe_ingredients.amount IS '[src: RecipeIngredient.amount]';
++
++CREATE INDEX idx_recipe_ingredients_material ON recipe_ingredients(raw_material_id);
++
++CREATE TABLE discount_rules (
++    code VARCHAR(20) PRIMARY KEY,
++    name VARCHAR(80) NOT NULL,
++    kind VARCHAR(10) NOT NULL CHECK (kind IN ('PERCENT', 'FIXED')),
++    value NUMERIC(14, 2) NOT NULL CHECK (value > 0),
++    CONSTRAINT chk_discount_percent CHECK (kind = 'FIXED' OR value <= 100)
++);
++COMMENT ON TABLE discount_rules IS 'Aturan diskon dari computeDiscountAmount(): member10 = 10% dari subtotal; promo20k = Rp20.000 dibatasi subtotal. DiscountType "none" berarti tanpa aturan (NULL di payments). [src: DiscountType]';
++
++-- ============================================================================
++-- 4. TRANSAKSI (BILL MEJA), BATCH, PEMBAYARAN, ITEM
++-- ============================================================================
++
++CREATE TABLE transactions (
++    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    number VARCHAR(40) NOT NULL UNIQUE,
++    table_id VARCHAR(10) NOT NULL REFERENCES dining_tables(id),
++    table_number VARCHAR(20) NOT NULL,
++    area VARCHAR(10) NOT NULL CHECK (area IN ('indoor', 'outdoor', 'vip')),
++    guest_count SMALLINT NOT NULL CHECK (guest_count > 0),
++    waiter_id SMALLINT NOT NULL REFERENCES waiters(id),
++    opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    status VARCHAR(10) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'settled', 'cancelled')),
++    payment_flow VARCHAR(15) CHECK (payment_flow IN ('payment_last', 'payment_first')),
++    service_charge_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.0500,
++    tax_rate NUMERIC(5, 4) NOT NULL DEFAULT 0.1000
++);
++COMMENT ON TABLE transactions IS 'Satu kunjungan/bill per meja. Total uang tidak disimpan di sini: kode menimpa total transaksi setiap ada batch atau pelunasan, sehingga totalnya diturunkan dari item dan payments (view v_transaction_summary).';
++COMMENT ON COLUMN transactions.number IS 'Contoh: TRX-20261023-4821, TRX-PF-... Kode membuatnya dengan angka acak 4 digit sehingga bisa bentrok; backend wajib memakai urutan. [src: Transaction.id]';
++COMMENT ON COLUMN transactions.table_id IS '[src: Transaction.tableId]';
++COMMENT ON COLUMN transactions.table_number IS 'Salinan nomor meja saat transaksi dibuat (dicetak di struk). [src: Transaction.tableNumber]';
++COMMENT ON COLUMN transactions.area IS 'Salinan area meja saat transaksi dibuat. [src: Transaction.area]';
++COMMENT ON COLUMN transactions.guest_count IS '[src: Transaction.guestCount]';
++COMMENT ON COLUMN transactions.waiter_id IS 'Kode menyimpan nama pramusaji sebagai teks. [src: Transaction.waiterName]';
++COMMENT ON COLUMN transactions.opened_at IS 'Waktu meja dibuka. KDS menghitung lama masak dari kolom ini, bukan dari waktu batch dikirim. [src: Transaction.openedAt]';
++COMMENT ON COLUMN transactions.status IS 'cancelled ada di tipe tetapi tidak pernah diisi oleh kode (belum ada fitur batal/void). [src: Transaction.status]';
++COMMENT ON COLUMN transactions.payment_flow IS 'Alur bayar terakhir pada transaksi ini. [src: Transaction.paymentFlow]';
++COMMENT ON COLUMN transactions.service_charge_rate IS 'Salinan tarif saat transaksi dibuat. [src: Transaction.serviceChargeRate]';
++COMMENT ON COLUMN transactions.tax_rate IS 'Salinan tarif PB1 saat transaksi dibuat. [src: Transaction.taxRate]';
++
++-- Satu meja hanya boleh punya satu transaksi aktif (Table.currentTransactionId bernilai tunggal)
++CREATE UNIQUE INDEX uq_transactions_one_active_per_table ON transactions(table_id) WHERE status = 'active';
++CREATE INDEX idx_transactions_opened_at ON transactions(opened_at DESC);
++
++CREATE TABLE transaction_batches (
++    transaction_id UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
++    batch_number SMALLINT NOT NULL CHECK (batch_number >= 1),
++    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    PRIMARY KEY (transaction_id, batch_number)
++);
++COMMENT ON TABLE transaction_batches IS 'Gelombang pesanan "Pesanan ke-N" pada satu meja; tiap batch dicetak ke dapur/bar/checker. [src: Transaction.batches]';
++COMMENT ON COLUMN transaction_batches.batch_number IS '[src: OrderBatch.batchNumber]';
++COMMENT ON COLUMN transaction_batches.sent_at IS '[src: OrderBatch.timestamp]';
++
++CREATE TABLE payments (
++    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    payment_number VARCHAR(50) NOT NULL UNIQUE,
++    transaction_id UUID NOT NULL REFERENCES transactions(id),
++    flow VARCHAR(15) NOT NULL CHECK (flow IN ('payment_last', 'payment_first')),
++    method VARCHAR(10) NOT NULL CHECK (method IN ('cash', 'qris', 'card')),
++    card_bank VARCHAR(40),
++    discount_rule_code VARCHAR(20) REFERENCES discount_rules(code),
++    subtotal_amount NUMERIC(14, 2) NOT NULL CHECK (subtotal_amount >= 0),
++    discount_amount NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (discount_amount >= 0),
++    service_charge_amount NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (service_charge_amount >= 0),
++    tax_amount NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
++    total_amount NUMERIC(14, 2) NOT NULL CHECK (total_amount >= 0),
++    cash_given NUMERIC(14, 2) NOT NULL CHECK (cash_given >= 0),
++    change_amount NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (change_amount >= 0),
++    cashier_id VARCHAR(40) NOT NULL REFERENCES staff_accounts(id),
++    paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    CONSTRAINT chk_payment_discount_le_subtotal CHECK (discount_amount <= subtotal_amount),
++    CONSTRAINT chk_payment_total CHECK (
++        total_amount = subtotal_amount - discount_amount + service_charge_amount + tax_amount
++    ),
++    CONSTRAINT chk_payment_cash CHECK (
++        (method = 'cash' AND cash_given >= total_amount AND change_amount = cash_given - total_amount)
++        OR (method <> 'cash' AND cash_given = total_amount AND change_amount = 0)
++    ),
++    CONSTRAINT chk_payment_card_bank CHECK (method = 'card' OR card_bank IS NULL)
++);
++COMMENT ON TABLE payments IS 'Satu baris per pelunasan (setiap record "settled" di kode). Satu transaksi bisa punya banyak pembayaran: Payment First melunasi batch tertentu di depan, sisanya dilunasi saat pelanggan selesai. Pendapatan = SUM(total_amount).';
++COMMENT ON COLUMN payments.payment_number IS 'Nomor bukti bayar. Kode memakai ulang id transaksi; pada Payment First di meja yang belum punya transaksi aktif, record aktif dan record lunas bahkan memakai id yang sama (App.tsx: activeTxId = settledTxId). Backend harus menerbitkan nomor unik.';
++COMMENT ON COLUMN payments.flow IS 'payment_first = dibayar saat memesan; payment_last = dibayar saat selesai.';
++COMMENT ON COLUMN payments.method IS 'Nilai split pada tipe Transaction.paymentMethod tidak pernah dihasilkan UI; pembayaran terbagi dimodelkan sebagai beberapa baris. [src: Transaction.paymentMethod]';
++COMMENT ON COLUMN payments.card_bank IS 'Pilihan bank EDC di layar bayar (default BCA EDC); di kode hanya state UI dan hilang setelah bayar.';
++COMMENT ON COLUMN payments.discount_rule_code IS 'Jenis diskon yang dipilih; kode hanya menyimpan nominalnya.';
++COMMENT ON COLUMN payments.subtotal_amount IS 'Jumlah subtotal item yang dilunasi pada pembayaran ini. [src: Transaction.subtotal]';
++COMMENT ON COLUMN payments.discount_amount IS '[src: Transaction.discountAmount]';
++COMMENT ON COLUMN payments.service_charge_amount IS '[src: Transaction.serviceChargeAmount]';
++COMMENT ON COLUMN payments.tax_amount IS 'PB1. [src: Transaction.taxAmount]';
++COMMENT ON COLUMN payments.total_amount IS '[src: Transaction.totalAmount]';
++COMMENT ON COLUMN payments.cash_given IS 'Untuk non-tunai kode mengisi sama dengan total. [src: Transaction.cashGiven]';
++COMMENT ON COLUMN payments.change_amount IS '[src: Transaction.changeAmount]';
++COMMENT ON COLUMN payments.cashier_id IS 'Kode menulis cashierName tetap "Budi Prasetyo" untuk semua pembayaran, bukan staf yang sedang login. [src: Transaction.cashierName]';
++COMMENT ON COLUMN payments.paid_at IS '[src: Transaction.paidAt]';
++
++CREATE INDEX idx_payments_transaction ON payments(transaction_id);
++CREATE INDEX idx_payments_paid_at ON payments(paid_at DESC);
++
++CREATE TABLE transaction_items (
++    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    transaction_id UUID NOT NULL,
++    batch_number SMALLINT NOT NULL,
++    menu_item_id VARCHAR(40) NOT NULL REFERENCES menu_items(id),
++    name VARCHAR(150) NOT NULL,
++    category VARCHAR(10) NOT NULL CHECK (category IN ('makanan', 'minuman', 'snack', 'dessert')),
++    destination VARCHAR(10) NOT NULL CHECK (destination IN ('kitchen', 'bar')),
++    unit_price NUMERIC(14, 2) NOT NULL CHECK (unit_price >= 0),
++    quantity INTEGER NOT NULL CHECK (quantity >= 1),
++    notes TEXT NOT NULL DEFAULT '',
++    subtotal NUMERIC(14, 2) NOT NULL CHECK (subtotal >= 0),
++    is_served BOOLEAN NOT NULL DEFAULT FALSE,
++    served_at TIMESTAMPTZ,
++    cooking_status VARCHAR(10) NOT NULL DEFAULT 'queue'
++        CHECK (cooking_status IN ('queue', 'cooking', 'ready', 'handed_off')),
++    handed_off_at TIMESTAMPTZ,
++    payment_id UUID REFERENCES payments(id),
++    CONSTRAINT fk_item_batch FOREIGN KEY (transaction_id, batch_number)
++        REFERENCES transaction_batches(transaction_id, batch_number) ON DELETE CASCADE
++);
++COMMENT ON TABLE transaction_items IS 'Baris pesanan. Nama, kategori, tujuan, dan harga disalin dari menu saat dipesan. [src: Transaction.allCurrentItems, OrderBatch.items]';
++COMMENT ON COLUMN transaction_items.id IS '[src: OrderItem.id]';
++COMMENT ON COLUMN transaction_items.batch_number IS '[src: OrderItem.batchNumber]';
++COMMENT ON COLUMN transaction_items.menu_item_id IS '[src: OrderItem.menuItemId]';
++COMMENT ON COLUMN transaction_items.name IS 'Salinan. [src: OrderItem.name]';
++COMMENT ON COLUMN transaction_items.category IS 'Salinan. [src: OrderItem.category]';
++COMMENT ON COLUMN transaction_items.destination IS 'Salinan. [src: OrderItem.destination]';
++COMMENT ON COLUMN transaction_items.unit_price IS 'Harga satuan di klien lalu disalin ke transaksi (celah yang sama dengan blueprint Gastro-Knowledge): backend harus mengambil dari menu_items. [src: OrderItem.unitPrice]';
++COMMENT ON COLUMN transaction_items.quantity IS '[src: OrderItem.quantity]';
++COMMENT ON COLUMN transaction_items.notes IS '[src: OrderItem.notes]';
++COMMENT ON COLUMN transaction_items.subtotal IS '(unit_price + jumlah price_delta modifier) x quantity. [src: OrderItem.subtotal]';
++COMMENT ON COLUMN transaction_items.is_served IS 'Centang pramusaji saat makanan sampai di meja. [src: OrderItem.isServed]';
++COMMENT ON COLUMN transaction_items.served_at IS '[src: OrderItem.servedAt]';
++COMMENT ON COLUMN transaction_items.cooking_status IS 'Status KDS: queue, cooking, ready, handed_off. Kode menganggap undefined sebagai queue. [src: OrderItem.cookingStatus]';
++COMMENT ON COLUMN transaction_items.handed_off_at IS '[src: OrderItem.handedOffAt]';
++COMMENT ON COLUMN transaction_items.payment_id IS 'NULL = belum dibayar. Menggantikan flag OrderItem.isPaid dan menunjuk pembayaran yang melunasi item ini. [src: OrderItem.isPaid]';
++
++CREATE INDEX idx_transaction_items_transaction ON transaction_items(transaction_id, batch_number);
++CREATE INDEX idx_transaction_items_payment ON transaction_items(payment_id) WHERE payment_id IS NOT NULL;
++CREATE INDEX idx_transaction_items_kds ON transaction_items(destination, cooking_status) WHERE is_served = FALSE;
++
++CREATE TABLE transaction_item_modifiers (
++    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
++    transaction_item_id UUID NOT NULL REFERENCES transaction_items(id) ON DELETE CASCADE,
++    group_name VARCHAR(100) NOT NULL,
++    option_name VARCHAR(100) NOT NULL,
++    price_delta NUMERIC(14, 2) NOT NULL DEFAULT 0
++);
++COMMENT ON TABLE transaction_item_modifiers IS 'Pilihan modifier pada item, disalin berdasarkan nama (bukan id) sehingga tetap utuh bila menu diubah. Data contoh di App.tsx memakai grup "Es Batu" yang tidak ada di menu. [src: OrderItem.selectedModifiers]';
++COMMENT ON COLUMN transaction_item_modifiers.group_name IS '[src: SelectedModifier.groupName]';
++COMMENT ON COLUMN transaction_item_modifiers.option_name IS '[src: SelectedModifier.optionName]';
++COMMENT ON COLUMN transaction_item_modifiers.price_delta IS '[src: SelectedModifier.priceDelta]';
++
++CREATE INDEX idx_item_modifiers_item ON transaction_item_modifiers(transaction_item_id);
++
++-- ============================================================================
++-- 5. TIKET CETAK DAN KAS KECIL
++-- ============================================================================
++
++CREATE TABLE print_tickets (
++    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    ticket_number VARCHAR(60) NOT NULL UNIQUE,
++    transaction_id UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
++    batch_number SMALLINT,
++    type VARCHAR(10) NOT NULL CHECK (type IN ('kitchen', 'bar', 'checker', 'receipt')),
++    payment_flow VARCHAR(15) CHECK (payment_flow IN ('payment_last', 'payment_first')),
++    payment_id UUID REFERENCES payments(id),
++    notes TEXT,
++    printed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    CONSTRAINT fk_ticket_batch FOREIGN KEY (transaction_id, batch_number)
++        REFERENCES transaction_batches(transaction_id, batch_number),
++    CONSTRAINT chk_ticket_receipt_has_payment CHECK ((type = 'receipt') = (payment_id IS NOT NULL))
++);
++COMMENT ON TABLE print_tickets IS 'Riwayat cetak: struk dapur, bar, checker per batch, dan struk pembayaran. Isi tiket diturunkan, bukan disalin: dapur/bar = item batch dengan destination yang sama, checker = semua item batch, receipt = item yang dilunasi payment_id. Kode menyimpan salinan item di tiket sehingga status dilayani harus diperbarui di dua tempat. [src: PrintTicket.items, PrintTicket.financials]';
++COMMENT ON COLUMN print_tickets.ticket_number IS 'Contoh: TKT-DAPUR-<ms>-<batch>, RCP-<ms>. [src: PrintTicket.id]';
++COMMENT ON COLUMN print_tickets.transaction_id IS '[src: PrintTicket.transactionId]';
++COMMENT ON COLUMN print_tickets.batch_number IS '[src: PrintTicket.batchNumber]';
++COMMENT ON COLUMN print_tickets.type IS '[src: PrintTicket.type]';
++COMMENT ON COLUMN print_tickets.payment_flow IS '[src: PrintTicket.paymentFlow]';
++COMMENT ON COLUMN print_tickets.notes IS '[src: PrintTicket.notes]';
++COMMENT ON COLUMN print_tickets.printed_at IS '[src: PrintTicket.timestamp]';
++
++CREATE INDEX idx_print_tickets_transaction ON print_tickets(transaction_id, printed_at DESC);
++
++CREATE TABLE petty_cash_entries (
++    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    description VARCHAR(200) NOT NULL,
++    category VARCHAR(20) NOT NULL CHECK (category IN ('operasional', 'bahan_darurat', 'utilitas', 'lainnya')),
++    amount NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
++    receipt_number VARCHAR(40),
++    recorded_by VARCHAR(40) NOT NULL REFERENCES staff_accounts(id)
++);
++COMMENT ON TABLE petty_cash_entries IS 'Pengeluaran kas kecil (FinanceView). Kode boleh menghapus entri; di backend sebaiknya dibatalkan, bukan dihapus.';
++COMMENT ON COLUMN petty_cash_entries.id IS '[src: PettyCashEntry.id]';
++COMMENT ON COLUMN petty_cash_entries.occurred_at IS '[src: PettyCashEntry.timestamp]';
++COMMENT ON COLUMN petty_cash_entries.description IS '[src: PettyCashEntry.description]';
++COMMENT ON COLUMN petty_cash_entries.category IS '[src: PettyCashEntry.category]';
++COMMENT ON COLUMN petty_cash_entries.amount IS '[src: PettyCashEntry.amount]';
++COMMENT ON COLUMN petty_cash_entries.receipt_number IS '[src: PettyCashEntry.receiptNumber]';
++COMMENT ON COLUMN petty_cash_entries.recorded_by IS 'Kode menyimpan nama staf sebagai teks. [src: PettyCashEntry.recordedBy]';
++
++CREATE INDEX idx_petty_cash_occurred_at ON petty_cash_entries(occurred_at DESC);
++
++-- ============================================================================
++-- 6. FUNGSI PERHITUNGAN (padanan posCalculations.ts)
++-- ============================================================================
++
++-- computeDiscountAmount(): member10 = Math.round(subtotal x 0.1), promo20k = Math.min(20000, subtotal)
++CREATE OR REPLACE FUNCTION calc_discount(p_subtotal NUMERIC, p_rule_code VARCHAR)
++RETURNS NUMERIC AS $$
++DECLARE
++    v_rule discount_rules%ROWTYPE;
++    v_safe NUMERIC := GREATEST(0, p_subtotal);
++BEGIN
++    IF p_rule_code IS NULL THEN
++        RETURN 0;
++    END IF;
++    SELECT * INTO v_rule FROM discount_rules WHERE code = p_rule_code;
++    IF NOT FOUND THEN
++        RAISE EXCEPTION 'Unknown discount rule: %', p_rule_code USING ERRCODE = 'GK006';
++    END IF;
++    IF v_rule.kind = 'PERCENT' THEN
++        RETURN ROUND(v_safe * v_rule.value / 100, 0);
++    END IF;
++    RETURN LEAST(v_rule.value, v_safe);
++END;
++$$ LANGUAGE plpgsql STABLE;
++
++-- calculateOrderTotals(): service = round(setelah diskon x rate); PB1 = round((setelah diskon + service) x rate)
++CREATE OR REPLACE FUNCTION calc_settlement(
++    p_subtotal NUMERIC,
++    p_discount NUMERIC,
++    p_service_rate NUMERIC,
++    p_tax_rate NUMERIC,
++    p_service_in_pb1_base BOOLEAN DEFAULT TRUE,
++    OUT o_service NUMERIC,
++    OUT o_tax NUMERIC,
++    OUT o_total NUMERIC
++) AS $$
++DECLARE
++    v_after NUMERIC := GREATEST(0, p_subtotal - p_discount);
++BEGIN
++    o_service := ROUND(v_after * p_service_rate, 0);
++    IF p_service_in_pb1_base THEN
++        o_tax := ROUND((v_after + o_service) * p_tax_rate, 0);
++    ELSE
++        o_tax := ROUND(v_after * p_tax_rate, 0);
++    END IF;
++    o_total := v_after + o_service + o_tax;
++END;
++$$ LANGUAGE plpgsql IMMUTABLE;
++
++-- deductRecipeMaterials(): potong bahan baku dari resep untuk satu batch.
++-- Perilaku kode dipertahankan: stok dijepit ke 0 (penjualan tetap jalan). Selisih
++-- dikembalikan sebagai baris shortage supaya backend dapat memberi peringatan.
++-- Kode membulatkan stok ke 2 desimal; fungsi ini memakai presisi kolom (4 desimal).
++CREATE OR REPLACE FUNCTION deduct_batch_stock(p_transaction_id UUID, p_batch_number INTEGER)
++RETURNS TABLE (
++    raw_material_id VARCHAR(40),
++    qty_used NUMERIC(14, 4),
++    stock_before NUMERIC(14, 4),
++    stock_after NUMERIC(14, 4),
++    shortage NUMERIC(14, 4),
++    is_low BOOLEAN
++) AS $$
++DECLARE
++    v_need RECORD;
++    v_before NUMERIC(14, 4);
++    v_after NUMERIC(14, 4);
++    v_min NUMERIC(14, 4);
++BEGIN
++    FOR v_need IN
++        SELECT ri.raw_material_id AS rm_id, SUM(ri.amount * ti.quantity) AS used
++        FROM transaction_items ti
++        JOIN recipe_ingredients ri ON ri.menu_item_id = ti.menu_item_id
++        WHERE ti.transaction_id = p_transaction_id AND ti.batch_number = p_batch_number
++        GROUP BY ri.raw_material_id
++        ORDER BY ri.raw_material_id COLLATE "C"
++    LOOP
++        SELECT rm.current_stock, rm.min_stock INTO v_before, v_min
++        FROM raw_materials rm WHERE rm.id = v_need.rm_id FOR UPDATE;
++
++        v_after := GREATEST(0, v_before - v_need.used);
++        UPDATE raw_materials SET current_stock = v_after WHERE id = v_need.rm_id;
++
++        raw_material_id := v_need.rm_id;
++        qty_used := v_need.used;
++        stock_before := v_before;
++        stock_after := v_after;
++        shortage := GREATEST(0, v_need.used - v_before);
++        is_low := v_after <= v_min;
++        RETURN NEXT;
++    END LOOP;
++END;
++$$ LANGUAGE plpgsql;
++
++-- ============================================================================
++-- 7. TRIGGER: status meja mengikuti transaksi aktif
++-- ============================================================================
++
++CREATE OR REPLACE FUNCTION sync_table_status() RETURNS TRIGGER AS $$
++BEGIN
++    IF NEW.status = 'active' THEN
++        UPDATE dining_tables SET status = 'occupied' WHERE id = NEW.table_id AND status <> 'occupied';
++    ELSIF NOT EXISTS (
++        SELECT 1 FROM transactions WHERE table_id = NEW.table_id AND status = 'active'
++    ) THEN
++        UPDATE dining_tables SET status = 'available'
++        WHERE id = NEW.table_id AND status IN ('occupied', 'billing');
++    END IF;
++    RETURN NULL;
++END;
++$$ LANGUAGE plpgsql;
++
++CREATE TRIGGER trg_transactions_table_status
++AFTER INSERT OR UPDATE OF status ON transactions
++FOR EACH ROW EXECUTE FUNCTION sync_table_status();
++
++-- ============================================================================
++-- 8. VIEW TURUNAN (field di TypeScript yang sengaja tidak disimpan)
++-- ============================================================================
++
++-- Table.currentTransactionId, guestCount, openedAt, waiterName
++CREATE VIEW v_table_board AS
++SELECT dt.id,
++       dt.table_number,
++       dt.area,
++       dt.capacity,
++       dt.status,
++       t.number AS current_transaction_number,
++       t.guest_count,
++       t.opened_at,
++       w.name AS waiter_name
++FROM dining_tables dt
++LEFT JOIN transactions t ON t.table_id = dt.id AND t.status = 'active'
++LEFT JOIN waiters w ON w.id = t.waiter_id;
++
++-- Transaction.isPaid, subtotal, dan sisa tagihan per transaksi
++CREATE VIEW v_transaction_summary AS
++SELECT t.id AS transaction_id,
++       t.number,
++       t.status,
++       COUNT(ti.id) AS item_count,
++       COALESCE(SUM(ti.subtotal), 0) AS items_subtotal,
++       COALESCE(SUM(ti.subtotal) FILTER (WHERE ti.payment_id IS NOT NULL), 0) AS paid_subtotal,
++       COALESCE(SUM(ti.subtotal) FILTER (WHERE ti.payment_id IS NULL), 0) AS unpaid_subtotal,
++       COUNT(ti.id) FILTER (WHERE ti.payment_id IS NULL) AS unpaid_item_count,
++       (COUNT(ti.id) > 0 AND COUNT(ti.id) FILTER (WHERE ti.payment_id IS NULL) = 0) AS is_paid,
++       COALESCE((SELECT SUM(p.total_amount) FROM payments p WHERE p.transaction_id = t.id), 0) AS payments_total
++FROM transactions t
++LEFT JOIN transaction_items ti ON ti.transaction_id = t.id
++GROUP BY t.id, t.number, t.status;
++
++-- isKdsItemActive() dan getActiveKdsTickets(): item belum dilayani dan belum diserahkan ke pramusaji
++CREATE VIEW v_kds_active_items AS
++SELECT ti.id AS item_id, t.number AS transaction_number, t.table_number, ti.destination AS station,
++       ti.name, ti.quantity, ti.notes, ti.cooking_status, ti.batch_number, t.opened_at
++FROM transaction_items ti
++JOIN transactions t ON t.id = ti.transaction_id
++WHERE t.status = 'active' AND ti.is_served = FALSE AND ti.cooking_status <> 'handed_off';
++
++-- isItemWaitingForWaiter(): selesai di KDS, belum dicentang pramusaji
++CREATE VIEW v_waiter_pickup_items AS
++SELECT ti.id AS item_id, t.number AS transaction_number, t.table_number, ti.destination AS station,
++       ti.name, ti.quantity, ti.handed_off_at
++FROM transaction_items ti
++JOIN transactions t ON t.id = ti.transaction_id
++WHERE t.status = 'active' AND ti.is_served = FALSE AND ti.cooking_status = 'handed_off';
++
++-- Rekap harian: omzet, service charge, PB1, diskon, dan rincian per metode bayar
++-- (calculateFinanceMetrics). Hari dihitung menurut WIB.
++CREATE VIEW v_daily_settlement AS
++SELECT (p.paid_at AT TIME ZONE 'Asia/Jakarta')::DATE AS business_date,
++       COUNT(*) AS payment_count,
++       SUM(p.total_amount) AS total_omzet,
++       SUM(p.subtotal_amount) AS total_subtotal,
++       SUM(p.service_charge_amount) AS total_service_charge,
++       SUM(p.tax_amount) AS total_pb1,
++       SUM(p.discount_amount) AS total_discount,
++       COALESCE(SUM(p.total_amount) FILTER (WHERE p.method = 'cash'), 0) AS cash_total,
++       COALESCE(SUM(p.total_amount) FILTER (WHERE p.method = 'qris'), 0) AS qris_total,
++       COALESCE(SUM(p.total_amount) FILTER (WHERE p.method = 'card'), 0) AS card_total
++FROM payments p
++GROUP BY (p.paid_at AT TIME ZONE 'Asia/Jakarta')::DATE;
++
++-- buildInventorySheetRows(): status stok dan nilai aset
++CREATE VIEW v_stock_status AS
++SELECT rm.id,
++       rm.name,
++       rm.storage_zone,
++       rm.current_stock,
++       rm.unit,
++       rm.min_stock,
++       rm.cost_per_unit,
++       ROUND(rm.current_stock * rm.cost_per_unit, 0) AS asset_value,
++       (rm.current_stock <= rm.min_stock) AS is_low
++FROM raw_materials rm;
++
++-- Pemeriksaan integritas yang tidak bisa dinyatakan dengan CHECK lintas tabel.
++-- Semua view di bawah harus kosong pada data yang sehat.
++CREATE VIEW v_integrity_item_subtotal AS
++SELECT ti.id AS item_id, ti.subtotal AS stored_subtotal,
++       (ti.unit_price + COALESCE((SELECT SUM(m.price_delta) FROM transaction_item_modifiers m
++                                  WHERE m.transaction_item_id = ti.id), 0)) * ti.quantity AS expected_subtotal
++FROM transaction_items ti
++WHERE ti.subtotal <> (ti.unit_price + COALESCE((SELECT SUM(m.price_delta) FROM transaction_item_modifiers m
++                                                WHERE m.transaction_item_id = ti.id), 0)) * ti.quantity;
++
++CREATE VIEW v_integrity_payment AS
++SELECT p.id AS payment_id, p.payment_number,
++       p.subtotal_amount AS stored_subtotal,
++       COALESCE(SUM(ti.subtotal), 0) AS items_subtotal,
++       p.discount_amount AS stored_discount,
++       calc_discount(p.subtotal_amount, p.discount_rule_code) AS expected_discount,
++       p.service_charge_amount AS stored_service,
++       p.tax_amount AS stored_tax,
++       cs.o_service AS expected_service,
++       cs.o_tax AS expected_tax
++FROM payments p
++LEFT JOIN transaction_items ti ON ti.payment_id = p.id
++JOIN transactions t ON t.id = p.transaction_id
++CROSS JOIN LATERAL calc_settlement(p.subtotal_amount, p.discount_amount, t.service_charge_rate, t.tax_rate) cs
++GROUP BY p.id, p.payment_number, p.subtotal_amount, p.discount_amount, p.discount_rule_code,
++         p.service_charge_amount, p.tax_amount, cs.o_service, cs.o_tax
++HAVING p.subtotal_amount <> COALESCE(SUM(ti.subtotal), 0)
++    OR p.discount_amount <> calc_discount(p.subtotal_amount, p.discount_rule_code)
++    OR p.service_charge_amount <> cs.o_service
++    OR p.tax_amount <> cs.o_tax;
+diff --git a/db/seed.sql b/db/seed.sql
+new file mode 100644
+index 0000000..a61bcb5
+--- /dev/null
++++ b/db/seed.sql
+@@ -0,0 +1,153 @@
++-- DIBUAT OTOMATIS oleh db/tools/generate-seed.ts dari src/data/initialData.ts, src/utils/authRoles.ts,
++-- src/utils/posCalculations.ts, dan src/components/OrderModal.tsx. Jangan diubah manual.
++-- Data demo: PIN dihash dengan pepper demo; ganti di produksi.
++
++INSERT INTO restaurant_settings (restaurant_name, address, npwpd, service_charge_rate, pb1_rate, service_in_pb1_base, payment_flow_mode) VALUES
++    ('RESTO NUSANTARA INDAH', 'Jl. Kuliner Rasa No. 88, Jakarta Selatan', '01.345.678.9-012.000', 0.05, 0.1, TRUE, 'payment_last');
++
++INSERT INTO units (code, label) VALUES
++    ('kg', 'kg'),
++    ('gram', 'gram'),
++    ('liter', 'liter'),
++    ('ml', 'ml'),
++    ('butir', 'butir'),
++    ('ekor', 'ekor'),
++    ('ikat', 'ikat'),
++    ('porsi', 'porsi'),
++    ('sisir', 'sisir'),
++    ('blok', 'blok');
++
++INSERT INTO roles (code, can_operate_pos, can_access_kds, can_access_checker, can_access_inventory, can_access_finance, can_access_owner_dashboard, can_manage_petty_cash, can_reset_demo) VALUES
++    ('owner', TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE),
++    ('cashier', TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
++    ('finance', FALSE, FALSE, FALSE, TRUE, TRUE, FALSE, TRUE, FALSE);
++
++INSERT INTO staff_accounts (id, name, role, pin_hash, nfc_tag_uid, avatar_color, role_label) VALUES
++    ('staff-owner-01', 'Hendrawan Kusuma', 'owner', 'cbc8ea79af7fa68cc6884ca35a367679c8643914a560d4f03bcbd7313fb53c13', 'NFC-OWNER-99', 'bg-amber-500', 'Owner / Executive'),
++    ('staff-cashier-01', 'Budi Prasetyo', 'cashier', 'f270b5428515ce62b397afe8921a64b5b19a6edd2799ae9f38d09395e0421c6a', 'NFC-CASHIER-12', 'bg-emerald-600', 'Kasir Front-of-House'),
++    ('staff-finance-01', 'Ratna Dewi', 'finance', '28b7f40937a40bcd31ee1cafb8ccb50519a14de884fcaa071f4a201504646bf6', 'NFC-FINANCE-56', 'bg-indigo-600', 'Finance & Tax PB1');
++
++INSERT INTO waiters (name, staff_id) VALUES
++    ('Budi Prasetyo', 'staff-cashier-01'),
++    ('Siti Rahma', NULL),
++    ('Doni Setiawan', NULL),
++    ('Rian Pratama', NULL);
++
++INSERT INTO discount_rules (code, name, kind, value) VALUES
++    ('member10', 'Diskon Member 10%', 'PERCENT', 10),
++    ('promo20k', 'Promo Potongan Rp20.000', 'FIXED', 20000);
++
++INSERT INTO dining_tables (id, table_number, area, capacity, status) VALUES
++    ('T01', '01', 'indoor', 2, 'available'),
++    ('T02', '02', 'indoor', 2, 'available'),
++    ('T03', '03', 'indoor', 4, 'available'),
++    ('T04', '04', 'indoor', 4, 'available'),
++    ('T05', '05', 'indoor', 4, 'available'),
++    ('T06', '06', 'indoor', 6, 'available'),
++    ('T07', '07', 'indoor', 4, 'available'),
++    ('T08', '08', 'indoor', 4, 'available'),
++    ('T09', '09', 'indoor', 4, 'available'),
++    ('T10', '10', 'indoor', 2, 'available'),
++    ('T11', '11', 'indoor', 2, 'available'),
++    ('T12', '12', 'indoor', 6, 'available'),
++    ('T13', '13', 'indoor', 4, 'available'),
++    ('T14', '14', 'indoor', 4, 'available'),
++    ('T15', '15', 'indoor', 4, 'available'),
++    ('T16', '16', 'indoor', 8, 'available'),
++    ('T17', '17', 'indoor', 4, 'available'),
++    ('T18', '18', 'indoor', 4, 'available'),
++    ('T19', '19', 'outdoor', 4, 'available'),
++    ('T20', '20', 'outdoor', 4, 'available'),
++    ('T21', '21', 'outdoor', 4, 'available'),
++    ('T22', '22', 'outdoor', 4, 'available'),
++    ('T23', '23', 'outdoor', 6, 'available'),
++    ('T24', '24', 'outdoor', 6, 'available'),
++    ('T25', '25', 'outdoor', 2, 'available'),
++    ('T26', '26', 'outdoor', 2, 'available'),
++    ('T27', '27', 'outdoor', 4, 'available'),
++    ('T28', '28', 'outdoor', 4, 'available'),
++    ('T29', '29', 'outdoor', 4, 'available'),
++    ('T30', '30', 'outdoor', 8, 'available'),
++    ('T31', 'VIP-1', 'vip', 8, 'available'),
++    ('T32', 'VIP-2', 'vip', 10, 'available'),
++    ('T33', 'VIP-3', 'vip', 12, 'available'),
++    ('T34', 'VIP-4', 'vip', 6, 'available'),
++    ('T35', 'VIP-5', 'vip', 8, 'available'),
++    ('T36', 'VIP-6', 'vip', 10, 'available');
++
++INSERT INTO raw_materials (id, name, unit, current_stock, min_stock, cost_per_unit, storage_zone) VALUES
++    ('raw-beras', 'Beras Pandan Wangi', 'kg', 30, 6, 15000, 'Dry Storage'),
++    ('raw-ayam', 'Daging Ayam Pejantan', 'porsi', 45, 10, 14000, 'Walk-in Chiller'),
++    ('raw-bebek', 'Bebek Ungkep Kuning', 'porsi', 25, 5, 22000, 'Walk-in Chiller'),
++    ('raw-gurame', 'Gurame Hidup Segar', 'ekor', 15, 3, 35000, 'Walk-in Chiller'),
++    ('raw-buntut', 'Buntut Sapi Impor', 'porsi', 20, 4, 32000, 'Deep Freezer'),
++    ('raw-mie', 'Mie Telur Basah', 'porsi', 35, 8, 6000, 'Walk-in Chiller'),
++    ('raw-kangkung', 'Kangkung Segar', 'ikat', 30, 8, 4000, 'Walk-in Chiller'),
++    ('raw-teh', 'Teh Melati Wangi', 'kg', 8, 2, 65000, 'Dry Storage'),
++    ('raw-jeruk', 'Jeruk Manis Peras', 'kg', 40, 10, 22000, 'Walk-in Chiller'),
++    ('raw-kopi', 'Biji Kopi Espresso Blend', 'kg', 9, 2, 180000, 'Bar Station'),
++    ('raw-susu', 'Susu Fresh Milk Pasteurisasi', 'liter', 30, 8, 21000, 'Bar Station'),
++    ('raw-aren', 'Gula Aren Organik', 'liter', 18, 4, 34000, 'Bar Station'),
++    ('raw-pisang', 'Pisang Kepok Kuning', 'sisir', 35, 8, 12000, 'Dry Storage'),
++    ('raw-tahu', 'Tahu Sutra Bandung', 'blok', 40, 10, 5500, 'Walk-in Chiller');
++
++INSERT INTO menu_items (id, name, category, destination, price, cost, portion_stock, image_url, description) VALUES
++    ('food-1', 'Nasi Goreng Spesial Resto', 'makanan', 'kitchen', 38000, 13200, 50, NULL, 'Nasi goreng bumbu gurih dengan suwiran ayam, udang, telur mata sapi, acar & kerupuk.'),
++    ('food-2', 'Ayam Bakar Madu Pedas', 'makanan', 'kitchen', 42000, 16500, 35, NULL, 'Ayam pejantan bakar balutan bumbu madu rempah bakar arang wangi, lalapan & sambal.'),
++    ('food-3', 'Bebek Goreng Serundeng Gurih', 'makanan', 'kitchen', 48000, 24000, 25, NULL, 'Bebek ungkep bumbu kuning digoreng garing dengan taburan serundeng kelapa & sambal korek.'),
++    ('food-4', 'Gurame Bakar Jimbaran (Porsi 2-3 Org)', 'makanan', 'kitchen', 85000, 38000, 15, NULL, 'Ikan gurame segar dibakar dengan pasta bumbu khas Jimbaran Bali bercita rasa gurih pedas manis.'),
++    ('food-5', 'Sate Ayam Madura (10 Tusuk)', 'makanan', 'kitchen', 36000, 14500, 40, NULL, 'Daging ayam tanpa kulit dipanggang arang disiram bumbu kacang lembut kental & irisan lontong.'),
++    ('food-6', 'Sop Buntut Sapi Kuah Hangat', 'makanan', 'kitchen', 72000, 35000, 20, NULL, 'Buntut sapi empuk dengan kuah kaldu rempah bening gurih, wortel, kentang & emping melinjo.'),
++    ('food-7', 'Mie Goreng Seafood Wok', 'makanan', 'kitchen', 39000, 15000, 30, NULL, 'Mie telur ditumis cepat dengan api besar (wok hei), cumi segar, udang, bakso & sawi hijau.'),
++    ('food-8', 'Tumis Kangkung Belacan Hotplate', 'makanan', 'kitchen', 24000, 6500, 45, NULL, 'Kangkung muda renyah ditumis terasi udang belacan harum dengan irisan cabai merah.'),
++    ('bev-1', 'Es Teh Manis Jasmine', 'minuman', 'bar', 9000, 1200, 150, NULL, 'Teh melati seduh harum khas nusantara disajikan segar dingin.'),
++    ('bev-2', 'Es Jeruk Peras Murni', 'minuman', 'bar', 18000, 5500, 80, NULL, '100% jeruk segar peras tanpa pemanis buatan, kaya vitamin C.'),
++    ('bev-3', 'Kopi Susu Gula Aren Barista', 'minuman', 'bar', 24000, 6800, 60, NULL, 'Espresso blend Arabika-Robusta dengan susu segar creamy dan sirup gula aren organik.'),
++    ('bev-4', 'Jus Alpukat Kerok Saus Cokelat', 'minuman', 'bar', 26000, 9000, 40, NULL, 'Alpukat mentega legit diblend kental dengan lelehan susu kental manis cokelat.'),
++    ('bev-5', 'Lychee Iced Tea with Real Fruit', 'minuman', 'bar', 22000, 6000, 50, NULL, 'Teh beraroma leci segar dengan 2 buah leci utuh dan daun mint dingin.'),
++    ('bev-6', 'Wedang Jahe Susu Rempah', 'minuman', 'bar', 20000, 5000, 35, NULL, 'Sari jahe merah geprek rebusan kapulaga, cengkeh & susu kental manis hangat.'),
++    ('snack-1', 'Pisang Goreng Keju Cokelat', 'snack', 'kitchen', 22000, 6500, 40, NULL, 'Pisang kepok matang dibalut tepung krispi dengan taburan keju cheddar parut melimpah & meses ceres.'),
++    ('snack-2', 'Tahu Cabe Garam Crispy', 'snack', 'kitchen', 20000, 4500, 45, NULL, 'Potongan tahu sutra garing berbumbu bawang putih cincang gurih, cabai rawit potong & garam laut.'),
++    ('snack-3', 'Singkong Keju Sambal Roa Manado', 'snack', 'kitchen', 24000, 6000, 30, NULL, 'Singkong empuk merekah dengan sambal roa asap khas Manado pedas mantap.'),
++    ('dessert-1', 'Es Cendol Durian Legit', 'dessert', 'bar', 28000, 11000, 25, NULL, 'Cendol pandan kenyal dengan kuah santan gurih, gula kelapa asli, dan 1 butir daging durian montong.');
++
++INSERT INTO modifier_groups (menu_item_id, code, name, is_required, sort_order) VALUES
++    ('food-1', 'pedas-1', 'Level Pedas', TRUE, 0),
++    ('food-1', 'telur-1', 'Pilihan Telur', FALSE, 1),
++    ('food-2', 'potongan-ayam', 'Pilihan Potongan', TRUE, 0),
++    ('food-2', 'sambal-ayam', 'Pilihan Sambal', FALSE, 1),
++    ('bev-1', 'gula-teh', 'Tingkat Manis', FALSE, 0);
++
++INSERT INTO modifier_options (group_id, name, price_delta, sort_order) VALUES
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-1' AND code = 'pedas-1'), 'Tidak Pedas', 0, 0),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-1' AND code = 'pedas-1'), 'Pedas Sedang', 0, 1),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-1' AND code = 'pedas-1'), 'Sangat Pedas (+Rp 2.000)', 2000, 2),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-1' AND code = 'telur-1'), 'Mata Sapi Setengah Matang', 0, 0),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-1' AND code = 'telur-1'), 'Mata Sapi Matang', 0, 1),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-1' AND code = 'telur-1'), 'Telur Dadar', 0, 2),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-2' AND code = 'potongan-ayam'), 'Paha Atas & Bawah', 0, 0),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-2' AND code = 'potongan-ayam'), 'Dada & Sayap', 0, 1),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-2' AND code = 'sambal-ayam'), 'Sambal Terasi Bakar', 0, 0),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-2' AND code = 'sambal-ayam'), 'Sambal Bawang Korek', 0, 1),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'food-2' AND code = 'sambal-ayam'), 'Sambal Kecap Rawit', 0, 2),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'bev-1' AND code = 'gula-teh'), 'Normal Manis', 0, 0),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'bev-1' AND code = 'gula-teh'), 'Less Sugar', 0, 1),
++    ((SELECT id FROM modifier_groups WHERE menu_item_id = 'bev-1' AND code = 'gula-teh'), 'Tawar (No Sugar)', 0, 2);
++
++INSERT INTO recipe_ingredients (menu_item_id, raw_material_id, amount) VALUES
++    ('food-1', 'raw-beras', 0.15),
++    ('food-1', 'raw-ayam', 0.5),
++    ('food-2', 'raw-ayam', 1),
++    ('food-3', 'raw-bebek', 1),
++    ('food-4', 'raw-gurame', 1),
++    ('food-5', 'raw-ayam', 1),
++    ('food-6', 'raw-buntut', 1),
++    ('food-7', 'raw-mie', 1),
++    ('food-8', 'raw-kangkung', 1),
++    ('bev-1', 'raw-teh', 0.015),
++    ('bev-2', 'raw-jeruk', 0.25),
++    ('bev-3', 'raw-kopi', 0.018),
++    ('bev-3', 'raw-susu', 0.12),
++    ('bev-3', 'raw-aren', 0.025),
++    ('snack-1', 'raw-pisang', 0.2),
++    ('snack-2', 'raw-tahu', 1);
+diff --git a/db/tests/check-coverage.ts b/db/tests/check-coverage.ts
+new file mode 100644
+index 0000000..55225be
+--- /dev/null
++++ b/db/tests/check-coverage.ts
+@@ -0,0 +1,159 @@
++// Memastikan setiap field di src/types/pos.ts punya padanan di skema, dan nilai enum-nya sama.
++//   bun db/tests/check-coverage.ts      (memakai PGHOST/PGPORT/PGUSER/PGDATABASE seperti psql)
++import { readFileSync } from 'node:fs';
++import { spawnSync } from 'node:child_process';
++import { dirname, join } from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
++const fieldMap = JSON.parse(readFileSync(join(root, 'db/field-map.json'), 'utf8')) as {
++  derived: Record<string, string>;
++  unusedAliases: Record<string, string>;
++  allowedTypeDifferences: Record<string, { tsOnly?: string[]; sqlOnly?: string[]; reason: string }>;
++  enumViaLookup: Record<string, string>;
++};
++
++function psql(sql: string): string[][] {
++  const r = spawnSync('psql', ['-X', '-At', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-c', sql], { encoding: 'utf8' });
++  if (r.status !== 0) throw new Error(`psql gagal: ${r.stderr}`);
++  return r.stdout.split('\n').filter(Boolean).map((l) => l.split('\t'));
++}
++
++// ---- 1. Parse src/types/pos.ts ---------------------------------------------------------------
++const src = readFileSync(join(root, 'src/types/pos.ts'), 'utf8').split('\n');
++const fields = new Map<string, string>(); // "Interface.field" -> teks tipe
++const aliases = new Map<string, string>(); // "Alias" -> teks tipe
++let current: string | null = null;
++let depth = 0;
++for (const line of src) {
++  const alias = line.match(/^export type (\w+)\s*=\s*(.+);$/);
++  if (alias) aliases.set(alias[1], alias[2]);
++  const open = line.match(/^export interface (\w+)\s*\{/);
++  if (open) {
++    current = open[1];
++    depth = 1;
++    continue;
++  }
++  if (!current) continue;
++  if (depth === 1) {
++    const f = line.match(/^ {2}(\w+)\??:\s*(.*?);?\s*(\/\/.*)?$/);
++    if (f) fields.set(`${current}.${f[1]}`, f[2].replace(/\s*\{$/, '').trim());
++  }
++  depth += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
++  if (depth <= 0) current = null;
++}
++
++const literalsOf = (typeText: string): string[] | null => {
++  const t = aliases.get(typeText) ?? typeText;
++  return /^('[^']+'\s*\|\s*)*'[^']+'$/.test(t) ? [...t.matchAll(/'([^']+)'/g)].map((m) => m[1]) : null;
++};
++
++// ---- 2. Baca komentar dan constraint dari database -------------------------------------------
++const comments = psql(`
++  SELECT c.relname, '' AS col, COALESCE(obj_description(c.oid, 'pg_class'), '')
++  FROM pg_class c WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace
++  UNION ALL
++  SELECT c.relname, a.attname, COALESCE(col_description(c.oid, a.attnum), '')
++  FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
++  WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace`);
++const tagged = new Map<string, string[]>(); // tag -> ["tabel.kolom" | "tabel"]
++for (const [table, col, comment] of comments) {
++  const m = comment?.match(/\[src:\s*([^\]]+)\]/);
++  if (!m) continue;
++  for (const tag of m[1].split(',').map((s) => s.trim())) {
++    const where = col ? `${table}.${col}` : table;
++    tagged.set(tag, [...(tagged.get(tag) ?? []), where]);
++  }
++}
++
++const checks = psql(`SELECT conrelid::regclass::text, pg_get_constraintdef(oid) FROM pg_constraint
++                     WHERE contype = 'c' AND connamespace = 'public'::regnamespace`);
++const checkLiterals = (table: string, col: string): Set<string> | null => {
++  const found = new Set<string>();
++  let any = false;
++  for (const [t, def] of checks) {
++    if (t !== table || !new RegExp(`\\(${col}\\)::text = ANY`).test(def)) continue;
++    any = true;
++    [...def.matchAll(/'([^']+)'::/g)].forEach((m) => found.add(m[1]));
++  }
++  return any ? found : null;
++};
++
++const dbColumns = new Set(psql(`SELECT table_name || '.' || column_name FROM information_schema.columns WHERE table_schema = 'public'`).map((r) => r[0]));
++
++// ---- 3. Periksa ------------------------------------------------------------------------------
++const problems: string[] = [];
++const mapped: string[] = [];
++const derived: string[] = [];
++
++for (const field of fields.keys()) {
++  if (tagged.has(field)) mapped.push(field);
++  else if (fieldMap.derived[field]) derived.push(field);
++  else problems.push(`Field ${field} tidak punya padanan (tambahkan [src: ${field}] di schema.sql atau entri di field-map.json)`);
++}
++for (const [field, target] of Object.entries(fieldMap.derived)) {
++  if (!fields.has(field)) problems.push(`field-map.json memuat ${field} yang tidak ada di pos.ts`);
++  const [kind, ref] = target.split(':');
++  if (!dbColumns.has(ref)) problems.push(`field-map.json: ${field} -> ${target}, kolom ${ref} tidak ada di database`);
++  if (kind !== 'view' && kind !== 'column') problems.push(`field-map.json: jenis target tidak dikenal pada ${field}`);
++}
++for (const tag of tagged.keys()) {
++  if (!fields.has(tag) && !aliases.has(tag)) problems.push(`Tag [src: ${tag}] di schema.sql tidak ada di pos.ts`);
++}
++for (const alias of aliases.keys()) {
++  const usedByField = [...fields.values()].some((t) => t === alias);
++  if (!usedByField && !tagged.has(alias) && !fieldMap.unusedAliases[alias]) {
++    problems.push(`Tipe ${alias} tidak dipakai field mana pun dan tidak dipetakan`);
++  }
++}
++
++// Nilai enum: union di TypeScript harus sama dengan CHECK di kolom padanannya
++let enumsChecked = 0;
++const compare = (label: string, ts: string[], sql: Set<string>, allow?: { tsOnly?: string[]; sqlOnly?: string[] }) => {
++  const tsOnly = ts.filter((v) => !sql.has(v) && !(allow?.tsOnly ?? []).includes(v));
++  const sqlOnly = [...sql].filter((v) => !ts.includes(v) && !(allow?.sqlOnly ?? []).includes(v));
++  enumsChecked++;
++  if (tsOnly.length || sqlOnly.length) {
++    problems.push(`Enum ${label}: hanya di TypeScript [${tsOnly}], hanya di SQL [${sqlOnly}]`);
++  }
++};
++for (const [field, typeText] of fields) {
++  const lits = literalsOf(typeText.replace(/\s*\|\s*undefined$/, ''));
++  if (!lits) continue;
++  const lookup = fieldMap.enumViaLookup[field];
++  for (const where of tagged.get(field) ?? []) {
++    if (!where.includes('.')) continue;
++    const [table, col] = lookup ? lookup.split('.') : where.split('.');
++    const sqlSet = checkLiterals(table, col);
++    if (!sqlSet) {
++      problems.push(`Enum ${field}: kolom ${table}.${col} tidak punya CHECK IN (...)`);
++      continue;
++    }
++    compare(`${field} -> ${table}.${col}`, lits, sqlSet, fieldMap.allowedTypeDifferences[field]);
++  }
++}
++// Alias yang dipetakan lewat tag tabel
++for (const alias of ['UserRole', 'PaymentFlowMode']) {
++  const lits = literalsOf(alias);
++  const lookup = fieldMap.enumViaLookup[alias];
++  if (!lits) continue;
++  const target = lookup ?? (tagged.get(alias) ?? [])[0] + '.payment_flow_mode';
++  const [table, col] = target.split('.');
++  const sqlSet = checkLiterals(table, col);
++  if (!sqlSet) problems.push(`Enum ${alias}: ${table}.${col} tidak punya CHECK`);
++  else compare(`${alias} -> ${table}.${col}`, lits, sqlSet);
++}
++const discountLits = (literalsOf('DiscountType') ?? []).filter((v) => v !== 'none');
++const discountRows = new Set(psql('SELECT code FROM discount_rules').map((r) => r[0]));
++if (discountRows.size > 0) compare('DiscountType (selain none) -> discount_rules.code', discountLits, discountRows);
++
++// ---- 4. Laporan ------------------------------------------------------------------------------
++console.log(`Field pos.ts           : ${fields.size} dari ${new Set([...fields.keys()].map((f) => f.split('.')[0])).size} antarmuka`);
++console.log(`Punya kolom/tabel      : ${mapped.length}`);
++console.log(`Diturunkan (view/kolom): ${derived.length}`);
++console.log(`Enum dibandingkan      : ${enumsChecked}`);
++if (problems.length) {
++  console.error(`\nMASALAH (${problems.length}):\n- ${problems.join('\n- ')}`);
++  process.exit(1);
++}
++console.log('COVERAGE OK: semua field terpetakan, semua enum sama.');
+diff --git a/db/tests/parity-gen.ts b/db/tests/parity-gen.ts
+new file mode 100644
+index 0000000..da87f8c
+--- /dev/null
++++ b/db/tests/parity-gen.ts
+@@ -0,0 +1,62 @@
++// Membuat skrip SQL yang membandingkan calc_discount() dan calc_settlement() di Postgres
++// dengan computeDiscountAmount() dan calculateOrderTotals() milik aplikasi (TypeScript).
++//   bun db/tests/parity-gen.ts | psql -X -v ON_ERROR_STOP=1 -d <database>
++import { computeDiscountAmount, calculateOrderTotals, SERVICE_CHARGE_RATE, PB1_TAX_RATE } from '../../src/utils/posCalculations';
++import type { DiscountType, OrderItem } from '../../src/types/pos';
++
++const subtotals = new Set<number>();
++for (let s = 0; s <= 1_000_000; s += 500) subtotals.add(s); // kelipatan harga menu nyata
++for (let s = 5; s <= 200_005; s += 10) subtotals.add(s); // titik .5 pada perhitungan 10% (pembulatan)
++for (let s = 10; s <= 200_010; s += 20) subtotals.add(s); // titik .5 pada service charge 5%
++let seed = 20261106; // acak deterministik
++const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
++for (let i = 0; i < 60_000; i++) subtotals.add(Math.floor(rnd() * 3_000_000));
++[-5000, -1, 1, 2, 3, 7, 9].forEach((s) => subtotals.add(s));
++
++const types: { type: DiscountType; code: string | null }[] = [
++  { type: 'none', code: null },
++  { type: 'member10', code: 'member10' },
++  { type: 'promo20k', code: 'promo20k' },
++];
++
++const lines: string[] = [];
++for (const sub of subtotals) {
++  for (const { type, code } of types) {
++    const discount = computeDiscountAmount(sub, type);
++    const t = calculateOrderTotals([{ subtotal: sub } as OrderItem], discount);
++    lines.push([sub, code ?? '\\N', discount, t.serviceChargeAmount, t.taxAmount, t.totalAmount].join('\t'));
++  }
++}
++
++const sql = `\\set ON_ERROR_STOP on
++CREATE TEMP TABLE parity (sub NUMERIC, code TEXT, ts_discount NUMERIC, ts_service NUMERIC, ts_tax NUMERIC, ts_total NUMERIC);
++COPY parity FROM STDIN;
++${lines.join('\n')}
++\\.
++DO $$
++DECLARE
++    v_total BIGINT;
++    v_bad BIGINT;
++    v_sample TEXT;
++BEGIN
++    SELECT COUNT(*) INTO v_total FROM parity;
++    WITH r AS (
++        SELECT p.*, calc_discount(p.sub, p.code) AS sql_discount
++        FROM parity p
++    ), s AS (
++        SELECT r.*, c.o_service AS sql_service, c.o_tax AS sql_tax, c.o_total AS sql_total
++        FROM r CROSS JOIN LATERAL calc_settlement(r.sub, r.sql_discount, ${SERVICE_CHARGE_RATE}, ${PB1_TAX_RATE}) c
++    )
++    SELECT COUNT(*) FILTER (WHERE sql_discount <> ts_discount OR sql_service <> ts_service OR sql_tax <> ts_tax OR sql_total <> ts_total),
++           string_agg(format('sub=%s %s ts(d=%s s=%s t=%s T=%s) sql(d=%s s=%s t=%s T=%s)', sub, COALESCE(code, 'none'),
++                      ts_discount, ts_service, ts_tax, ts_total, sql_discount, sql_service, sql_tax, sql_total), E'\\n')
++           FILTER (WHERE sql_discount <> ts_discount OR sql_service <> ts_service OR sql_tax <> ts_tax OR sql_total <> ts_total)
++    INTO v_bad, v_sample
++    FROM (SELECT * FROM s ORDER BY sub LIMIT 100000000) x;
++    IF v_bad > 0 THEN
++        RAISE EXCEPTION 'PARITAS GAGAL: % dari % kasus berbeda. Contoh:%', v_bad, v_total, E'\\n' || left(v_sample, 1500);
++    END IF;
++    RAISE NOTICE 'PARITAS OK: % kasus (% subtotal x 3 jenis diskon), 0 selisih', v_total, v_total / 3;
++END $$;
++`;
++process.stdout.write(sql);
+diff --git a/db/tests/run.sh b/db/tests/run.sh
+new file mode 100755
+index 0000000..04d571b
+--- /dev/null
++++ b/db/tests/run.sh
+@@ -0,0 +1,39 @@
++#!/usr/bin/env bash
++# Memuat skema dan seed ke database uji baru, lalu menjalankan semua pengujian.
++#   bash db/tests/run.sh
++# Butuh: PostgreSQL 15+ (psql di PATH, koneksi lewat PGHOST/PGPORT/PGUSER) dan bun.
++# Database uji (default gc_test) DIHAPUS dan dibuat ulang setiap kali dijalankan.
++set -euo pipefail
++cd "$(dirname "$0")/../.."
++DB="${GC_TEST_DB:-gc_test}"
++
++psql -X -q -d postgres -c "DROP DATABASE IF EXISTS $DB" -c "CREATE DATABASE $DB"
++export PGDATABASE="$DB"
++
++echo "1/6 skema";    psql -X -q -v ON_ERROR_STOP=1 -f db/schema.sql
++echo "2/6 seed";     psql -X -q -v ON_ERROR_STOP=1 -f db/seed.sql
++echo "3/6 seed sama dengan hasil generator"
++bun db/tools/generate-seed.ts | diff -q db/seed.sql - >/dev/null \
++  || { echo "GAGAL: db/seed.sql tidak sama dengan keluaran db/tools/generate-seed.ts"; exit 1; }
++
++echo "4/6 skenario kasir"
++psql -X -v ON_ERROR_STOP=1 -f db/tests/scenarios.sql 2>&1 | grep -E "NOTICE:  ok" | wc -l | xargs echo "    pemeriksaan lulus:"
++
++echo "5/6 paritas hitungan SQL vs TypeScript"
++bun db/tests/parity-gen.ts | psql -X -v ON_ERROR_STOP=1 2>&1 | grep -E "PARITAS"
++
++echo "6/6 cakupan field pos.ts"
++bun db/tests/check-coverage.ts
++
++echo "dokumen ERD dan kamus data sesuai skema?"
++TMP="$(mktemp -d)"
++cp db/ERD.md db/DATA_DICTIONARY.md "$TMP"/
++bun db/tools/generate-erd.ts >/dev/null
++if diff -q db/ERD.md "$TMP/ERD.md" >/dev/null && diff -q db/DATA_DICTIONARY.md "$TMP/DATA_DICTIONARY.md" >/dev/null; then
++  echo "    sesuai"
++else
++  echo "GAGAL: ERD.md / DATA_DICTIONARY.md sudah usang. File sudah dibuat ulang; periksa lalu commit."
++  exit 1
++fi
++rm -rf "$TMP"
++echo "SEMUA LULUS"
+diff --git a/db/tests/scenarios.sql b/db/tests/scenarios.sql
+new file mode 100644
+index 0000000..fccd058
+--- /dev/null
++++ b/db/tests/scenarios.sql
+@@ -0,0 +1,319 @@
++-- Skenario uji skema. Dijalankan setelah schema.sql dan seed.sql.
++-- Angka acuan dihitung dengan fungsi TypeScript milik repo (posCalculations.ts).
++-- Gagal = RAISE EXCEPTION, psql berhenti dengan kode keluar bukan nol.
++\set ON_ERROR_STOP on
++
++CREATE SCHEMA IF NOT EXISTS t;
++
++CREATE OR REPLACE FUNCTION t.eq(p_label TEXT, p_actual ANYELEMENT, p_expected ANYELEMENT) RETURNS VOID AS $$
++BEGIN
++    IF p_actual IS DISTINCT FROM p_expected THEN
++        RAISE EXCEPTION 'GAGAL [%]: hasil %, seharusnya %', p_label, p_actual, p_expected;
++    END IF;
++    RAISE NOTICE 'ok   %', p_label;
++END;
++$$ LANGUAGE plpgsql;
++
++-- Menjalankan p_sql dan memastikan gagal dengan SQLSTATE tertentu
++CREATE OR REPLACE FUNCTION t.fails(p_label TEXT, p_sql TEXT, p_state TEXT) RETURNS VOID AS $$
++BEGIN
++    BEGIN
++        EXECUTE p_sql;
++    EXCEPTION WHEN OTHERS THEN
++        IF SQLSTATE = p_state THEN
++            RAISE NOTICE 'ok   % (ditolak %)', p_label, SQLSTATE;
++            RETURN;
++        END IF;
++        RAISE EXCEPTION 'GAGAL [%]: ditolak dengan % (%), seharusnya %', p_label, SQLSTATE, SQLERRM, p_state;
++    END;
++    RAISE EXCEPTION 'GAGAL [%]: pernyataan berhasil, seharusnya ditolak (%)', p_label, p_state;
++END;
++$$ LANGUAGE plpgsql;
++
++-- ----------------------------------------------------------------------------
++-- A. Bayar belakang: dua batch di meja T03, dilunasi sekali dengan diskon member10
++-- ----------------------------------------------------------------------------
++DO $$
++DECLARE
++    v_tx UUID;
++    v_item UUID;
++    v_pay UUID;
++    v_stock RECORD;
++    v_disc NUMERIC;
++    v_calc RECORD;
++BEGIN
++    INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id, payment_flow)
++    VALUES ('TRX-TEST-A', 'T03', '03', 'indoor', 2, (SELECT id FROM waiters WHERE name = 'Doni Setiawan'), 'payment_last')
++    RETURNING id INTO v_tx;
++    PERFORM t.eq('A1 meja T03 menjadi occupied', (SELECT status FROM dining_tables WHERE id = 'T03'), 'occupied');
++    PERFORM t.eq('A2 v_table_board memuat bill aktif',
++        (SELECT current_transaction_number FROM v_table_board WHERE id = 'T03'), 'TRX-TEST-A');
++    PERFORM t.eq('A3 v_table_board memuat nama pramusaji',
++        (SELECT waiter_name FROM v_table_board WHERE id = 'T03'), 'Doni Setiawan');
++
++    INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (v_tx, 1);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal, notes)
++    VALUES (v_tx, 1, 'food-1', 'Nasi Goreng Spesial Resto', 'makanan', 'kitchen', 38000, 2, 80000, 'Acar dipisah')
++    RETURNING id INTO v_item;
++    INSERT INTO transaction_item_modifiers (transaction_item_id, group_name, option_name, price_delta)
++    VALUES (v_item, 'Level Pedas', 'Sangat Pedas (+Rp 2.000)', 2000);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal)
++    VALUES (v_tx, 1, 'bev-1', 'Es Teh Manis Jasmine', 'minuman', 'bar', 9000, 3, 27000);
++
++    -- Potong stok batch 1: beras 0.15 x 2, ayam 0.5 x 2, teh 0.015 x 3
++    SELECT * INTO v_stock FROM deduct_batch_stock(v_tx, 1) WHERE raw_material_id = 'raw-beras';
++    PERFORM t.eq('A4 beras terpotong 0.3', v_stock.qty_used, 0.3000::NUMERIC(14,4));
++    PERFORM t.eq('A5 sisa beras 29.7', v_stock.stock_after, 29.7000::NUMERIC(14,4));
++    PERFORM t.eq('A6 ayam 45 menjadi 44', (SELECT current_stock FROM raw_materials WHERE id = 'raw-ayam'), 44.0000::NUMERIC(14,4));
++    PERFORM t.eq('A7 teh 8 menjadi 7.955 (kode asli membulatkan stok ke 2 desimal)',
++        (SELECT current_stock FROM raw_materials WHERE id = 'raw-teh'), 7.9550::NUMERIC(14,4));
++
++    -- Batch 2 ditambahkan saat meja masih terbuka
++    INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (v_tx, 2);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal)
++    VALUES (v_tx, 2, 'bev-2', 'Es Jeruk Peras Murni', 'minuman', 'bar', 18000, 1, 18000);
++    PERFORM deduct_batch_stock(v_tx, 2);
++
++    PERFORM t.eq('A8 subtotal item belum dibayar', (SELECT unpaid_subtotal FROM v_transaction_summary WHERE transaction_id = v_tx), 125000.00::NUMERIC);
++    PERFORM t.eq('A9 belum lunas', (SELECT is_paid FROM v_transaction_summary WHERE transaction_id = v_tx), FALSE);
++
++    -- Pelunasan: member10 pada 125000 => diskon 12500, service 5625, PB1 11813, total 129938
++    v_disc := calc_discount(125000, 'member10');
++    PERFORM t.eq('A10 diskon member10 = 12500', v_disc, 12500::NUMERIC);
++    SELECT * INTO v_calc FROM calc_settlement(125000, v_disc, 0.05, 0.10);
++    PERFORM t.eq('A11 service charge = 5625', v_calc.o_service, 5625::NUMERIC);
++    PERFORM t.eq('A12 PB1 = 11813 (11812.5 dibulatkan naik, sama dengan Math.round)', v_calc.o_tax, 11813::NUMERIC);
++    PERFORM t.eq('A13 total = 129938', v_calc.o_total, 129938::NUMERIC);
++
++    INSERT INTO payments (payment_number, transaction_id, flow, method, discount_rule_code,
++                          subtotal_amount, discount_amount, service_charge_amount, tax_amount, total_amount,
++                          cash_given, change_amount, cashier_id)
++    VALUES ('PAY-TEST-A1', v_tx, 'payment_last', 'cash', 'member10',
++            125000, 12500, 5625, 11813, 129938, 150000, 20062, 'staff-cashier-01')
++    RETURNING id INTO v_pay;
++    UPDATE transaction_items SET payment_id = v_pay WHERE transaction_id = v_tx AND payment_id IS NULL;
++    INSERT INTO print_tickets (ticket_number, transaction_id, batch_number, type, payment_flow, payment_id)
++    VALUES ('RCP-TEST-A1', v_tx, NULL, 'receipt', 'payment_last', v_pay);
++    UPDATE transactions SET status = 'settled' WHERE id = v_tx;
++
++    PERFORM t.eq('A14 lunas', (SELECT is_paid FROM v_transaction_summary WHERE transaction_id = v_tx), TRUE);
++    PERFORM t.eq('A15 meja T03 kembali available', (SELECT status FROM dining_tables WHERE id = 'T03'), 'available');
++    PERFORM t.eq('A16 pembayaran konsisten dengan item (v_integrity_payment kosong)', (SELECT COUNT(*) FROM v_integrity_payment), 0::BIGINT);
++    PERFORM t.eq('A17 subtotal item konsisten dengan modifier (v_integrity_item_subtotal kosong)', (SELECT COUNT(*) FROM v_integrity_item_subtotal), 0::BIGINT);
++END $$;
++
++-- ----------------------------------------------------------------------------
++-- B. Bayar depan batch 1 (QRIS), tambah batch 2, KDS dan pramusaji, lunas belakang (kartu + promo20k)
++-- ----------------------------------------------------------------------------
++DO $$
++DECLARE
++    v_tx UUID;
++    v_pay1 UUID;
++    v_pay2 UUID;
++BEGIN
++    INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id, payment_flow)
++    VALUES ('TRX-TEST-B', 'T04', '04', 'indoor', 3, (SELECT id FROM waiters WHERE name = 'Siti Rahma'), 'payment_first')
++    RETURNING id INTO v_tx;
++    INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (v_tx, 1);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal)
++    VALUES (v_tx, 1, 'food-2', 'Ayam Bakar Madu Pedas', 'makanan', 'kitchen', 42000, 1, 42000);
++
++    INSERT INTO payments (payment_number, transaction_id, flow, method,
++                          subtotal_amount, discount_amount, service_charge_amount, tax_amount, total_amount,
++                          cash_given, change_amount, cashier_id)
++    VALUES ('PAY-TEST-B1', v_tx, 'payment_first', 'qris', 42000, 0, 2100, 4410, 48510, 48510, 0, 'staff-cashier-01')
++    RETURNING id INTO v_pay1;
++    UPDATE transaction_items SET payment_id = v_pay1 WHERE transaction_id = v_tx;
++    INSERT INTO print_tickets (ticket_number, transaction_id, batch_number, type, payment_flow, payment_id)
++    VALUES ('RCP-TEST-B1', v_tx, 1, 'receipt', 'payment_first', v_pay1);
++    INSERT INTO print_tickets (ticket_number, transaction_id, batch_number, type, payment_flow)
++    VALUES ('TKT-DAPUR-TEST-B1', v_tx, 1, 'kitchen', 'payment_first');
++
++    PERFORM t.eq('B1 sesudah bayar depan, meja tetap occupied', (SELECT status FROM dining_tables WHERE id = 'T04'), 'occupied');
++    PERFORM t.eq('B2 batch 1 lunas', (SELECT is_paid FROM v_transaction_summary WHERE transaction_id = v_tx), TRUE);
++
++    -- KDS: item dapur antre -> masak -> siap -> diserahkan -> dicentang pramusaji
++    PERFORM t.eq('B3 KDS aktif memuat item batch 1', (SELECT COUNT(*) FROM v_kds_active_items WHERE transaction_number = 'TRX-TEST-B'), 1::BIGINT);
++    UPDATE transaction_items SET cooking_status = 'cooking' WHERE transaction_id = v_tx;
++    UPDATE transaction_items SET cooking_status = 'ready' WHERE transaction_id = v_tx;
++    PERFORM t.eq('B4 item siap masih di KDS', (SELECT COUNT(*) FROM v_kds_active_items WHERE transaction_number = 'TRX-TEST-B'), 1::BIGINT);
++    UPDATE transaction_items SET cooking_status = 'handed_off', handed_off_at = NOW() WHERE transaction_id = v_tx;
++    PERFORM t.eq('B5 item diserahkan keluar dari KDS', (SELECT COUNT(*) FROM v_kds_active_items WHERE transaction_number = 'TRX-TEST-B'), 0::BIGINT);
++    PERFORM t.eq('B6 item menunggu pramusaji', (SELECT COUNT(*) FROM v_waiter_pickup_items WHERE transaction_number = 'TRX-TEST-B'), 1::BIGINT);
++    UPDATE transaction_items SET is_served = TRUE, served_at = NOW() WHERE transaction_id = v_tx;
++    PERFORM t.eq('B7 setelah dicentang, hilang dari antrean pramusaji', (SELECT COUNT(*) FROM v_waiter_pickup_items WHERE transaction_number = 'TRX-TEST-B'), 0::BIGINT);
++
++    -- Tambah batch 2 (bayar belakang)
++    INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (v_tx, 2);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal)
++    VALUES (v_tx, 2, 'bev-3', 'Kopi Susu Gula Aren Barista', 'minuman', 'bar', 24000, 2, 48000);
++    PERFORM t.eq('B8 ada tagihan baru, is_paid kembali FALSE', (SELECT is_paid FROM v_transaction_summary WHERE transaction_id = v_tx), FALSE);
++    PERFORM t.eq('B9 sisa tagihan = batch 2', (SELECT unpaid_subtotal FROM v_transaction_summary WHERE transaction_id = v_tx), 48000.00::NUMERIC);
++
++    -- promo20k: diskon 20000, setelah diskon 28000, service 1400, PB1 2940, total 32340
++    INSERT INTO payments (payment_number, transaction_id, flow, method, card_bank, discount_rule_code,
++                          subtotal_amount, discount_amount, service_charge_amount, tax_amount, total_amount,
++                          cash_given, change_amount, cashier_id)
++    VALUES ('PAY-TEST-B2', v_tx, 'payment_last', 'card', 'BCA EDC', 'promo20k',
++            48000, 20000, 1400, 2940, 32340, 32340, 0, 'staff-cashier-01')
++    RETURNING id INTO v_pay2;
++    UPDATE transaction_items SET payment_id = v_pay2 WHERE transaction_id = v_tx AND payment_id IS NULL;
++    UPDATE transactions SET status = 'settled' WHERE id = v_tx;
++
++    PERFORM t.eq('B10 dua pembayaran pada satu bill', (SELECT COUNT(*) FROM payments WHERE transaction_id = v_tx), 2::BIGINT);
++    PERFORM t.eq('B11 total pembayaran = 80850', (SELECT payments_total FROM v_transaction_summary WHERE transaction_id = v_tx), 80850.00::NUMERIC);
++    PERFORM t.eq('B12 meja T04 available setelah lunas', (SELECT status FROM dining_tables WHERE id = 'T04'), 'available');
++    PERFORM t.eq('B13 integritas pembayaran tetap bersih', (SELECT COUNT(*) FROM v_integrity_payment), 0::BIGINT);
++END $$;
++
++-- ----------------------------------------------------------------------------
++-- C. Takeaway bayar depan (keep_available): bill langsung settled, meja tetap kosong
++-- ----------------------------------------------------------------------------
++DO $$
++DECLARE
++    v_tx UUID;
++    v_pay UUID;
++BEGIN
++    INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id, status, payment_flow)
++    VALUES ('TRX-TEST-C', 'T05', '05', 'indoor', 1, (SELECT id FROM waiters WHERE name = 'Budi Prasetyo'), 'settled', 'payment_first')
++    RETURNING id INTO v_tx;
++    INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (v_tx, 1);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal)
++    VALUES (v_tx, 1, 'bev-1', 'Es Teh Manis Jasmine', 'minuman', 'bar', 9000, 1, 9000);
++    INSERT INTO payments (payment_number, transaction_id, flow, method,
++                          subtotal_amount, discount_amount, service_charge_amount, tax_amount, total_amount,
++                          cash_given, change_amount, cashier_id)
++    VALUES ('PAY-TEST-C1', v_tx, 'payment_first', 'cash', 9000, 0, 450, 945, 10395, 50000, 39605, 'staff-cashier-01')
++    RETURNING id INTO v_pay;
++    UPDATE transaction_items SET payment_id = v_pay WHERE transaction_id = v_tx;
++    PERFORM t.eq('C1 meja T05 tetap available', (SELECT status FROM dining_tables WHERE id = 'T05'), 'available');
++    PERFORM t.eq('C2 bill takeaway lunas', (SELECT is_paid FROM v_transaction_summary WHERE transaction_id = v_tx), TRUE);
++END $$;
++
++-- ----------------------------------------------------------------------------
++-- D. Rekap harian dan status stok
++-- ----------------------------------------------------------------------------
++DO $$
++BEGIN
++    PERFORM t.eq('D1 omzet = 129938 + 48510 + 32340 + 10395', (SELECT SUM(total_omzet) FROM v_daily_settlement), 221183.00::NUMERIC);
++    PERFORM t.eq('D2 PB1 = 11813 + 4410 + 2940 + 945', (SELECT SUM(total_pb1) FROM v_daily_settlement), 20108.00::NUMERIC);
++    PERFORM t.eq('D3 service = 5625 + 2100 + 1400 + 450', (SELECT SUM(total_service_charge) FROM v_daily_settlement), 9575.00::NUMERIC);
++    PERFORM t.eq('D4 diskon = 12500 + 20000', (SELECT SUM(total_discount) FROM v_daily_settlement), 32500.00::NUMERIC);
++    PERFORM t.eq('D5 tunai = 129938 + 10395', (SELECT SUM(cash_total) FROM v_daily_settlement), 140333.00::NUMERIC);
++    PERFORM t.eq('D6 QRIS', (SELECT SUM(qris_total) FROM v_daily_settlement), 48510.00::NUMERIC);
++    PERFORM t.eq('D7 kartu', (SELECT SUM(card_total) FROM v_daily_settlement), 32340.00::NUMERIC);
++    PERFORM t.eq('D8 nilai aset beras 29.7 x 15000', (SELECT asset_value FROM v_stock_status WHERE id = 'raw-beras'), 445500::NUMERIC);
++    PERFORM t.eq('D9 tidak ada bahan di bawah ROP pada data awal', (SELECT COUNT(*) FROM v_stock_status WHERE is_low), 0::BIGINT);
++END $$;
++
++-- ----------------------------------------------------------------------------
++-- E. Stok dijepit ke 0 (perilaku kode) dan selisih dilaporkan
++-- ----------------------------------------------------------------------------
++DO $$
++DECLARE
++    v_tx UUID;
++    v_row RECORD;
++BEGIN
++    UPDATE raw_materials SET current_stock = 0.010 WHERE id = 'raw-kopi';
++    INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id)
++    VALUES ('TRX-TEST-E', 'T06', '06', 'indoor', 2, (SELECT id FROM waiters WHERE name = 'Rian Pratama'))
++    RETURNING id INTO v_tx;
++    INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (v_tx, 1);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal)
++    VALUES (v_tx, 1, 'bev-3', 'Kopi Susu Gula Aren Barista', 'minuman', 'bar', 24000, 1, 24000);
++    SELECT * INTO v_row FROM deduct_batch_stock(v_tx, 1) WHERE raw_material_id = 'raw-kopi';
++    PERFORM t.eq('E1 kopi terpakai 0.018', v_row.qty_used, 0.0180::NUMERIC(14,4));
++    PERFORM t.eq('E2 stok dijepit ke 0', v_row.stock_after, 0.0000::NUMERIC(14,4));
++    PERFORM t.eq('E3 selisih kekurangan 0.008 dilaporkan', v_row.shortage, 0.0080::NUMERIC(14,4));
++    PERFORM t.eq('E4 ditandai di bawah ROP', v_row.is_low, TRUE);
++
++    -- Menu tanpa resep (bev-4) tidak memotong stok apa pun
++    INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id)
++    VALUES ('TRX-TEST-E2', 'T08', '08', 'indoor', 1, 1) RETURNING id INTO v_tx;
++    INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (v_tx, 1);
++    INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal)
++    VALUES (v_tx, 1, 'bev-4', 'Jus Alpukat Kerok Saus Cokelat', 'minuman', 'bar', 26000, 1, 26000);
++    PERFORM t.eq('E5 menu tanpa resep tidak memotong apa pun', (SELECT COUNT(*) FROM deduct_batch_stock(v_tx, 1)), 0::BIGINT);
++END $$;
++
++-- ----------------------------------------------------------------------------
++-- F. Constraint harus menolak data salah
++-- ----------------------------------------------------------------------------
++DO $$
++DECLARE
++    v_tx UUID := (SELECT id FROM transactions WHERE number = 'TRX-TEST-B');
++    v_open UUID;
++    v_pay UUID := (SELECT id FROM payments WHERE payment_number = 'PAY-TEST-A1');
++BEGIN
++    INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id)
++    VALUES ('TRX-TEST-F', 'T07', '07', 'indoor', 2, 1) RETURNING id INTO v_open;
++
++    PERFORM t.fails('F1 dua bill aktif di satu meja',
++        $q$INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id) VALUES ('TRX-TEST-F2', 'T07', '07', 'indoor', 1, 1)$q$, '23505');
++    PERFORM t.fails('F2 nomor transaksi ganda',
++        $q$INSERT INTO transactions (number, table_id, table_number, area, guest_count, waiter_id, status) VALUES ('TRX-TEST-F', 'T08', '08', 'indoor', 1, 1, 'settled')$q$, '23505');
++    PERFORM t.fails('F3 total pembayaran tidak sama dengan rincian',
++        format($q$INSERT INTO payments (payment_number, transaction_id, flow, method, subtotal_amount, service_charge_amount, tax_amount, total_amount, cash_given, change_amount, cashier_id) VALUES ('PAY-F3', %L, 'payment_last', 'qris', 10000, 500, 1050, 11000, 11000, 0, 'staff-cashier-01')$q$, v_open), '23514');
++    PERFORM t.fails('F4 tunai kurang dari total',
++        format($q$INSERT INTO payments (payment_number, transaction_id, flow, method, subtotal_amount, service_charge_amount, tax_amount, total_amount, cash_given, change_amount, cashier_id) VALUES ('PAY-F4', %L, 'payment_last', 'cash', 10000, 500, 1050, 11550, 10000, 0, 'staff-cashier-01')$q$, v_open), '23514');
++    PERFORM t.fails('F5 non-tunai dengan kembalian',
++        format($q$INSERT INTO payments (payment_number, transaction_id, flow, method, subtotal_amount, service_charge_amount, tax_amount, total_amount, cash_given, change_amount, cashier_id) VALUES ('PAY-F5', %L, 'payment_last', 'qris', 10000, 500, 1050, 11550, 12000, 450, 'staff-cashier-01')$q$, v_open), '23514');
++    PERFORM t.fails('F6 bank kartu pada pembayaran tunai',
++        format($q$INSERT INTO payments (payment_number, transaction_id, flow, method, card_bank, subtotal_amount, service_charge_amount, tax_amount, total_amount, cash_given, change_amount, cashier_id) VALUES ('PAY-F6', %L, 'payment_last', 'cash', 'BCA EDC', 10000, 500, 1050, 11550, 11550, 0, 'staff-cashier-01')$q$, v_open), '23514');
++    PERFORM t.fails('F7 metode split bukan metode pembayaran',
++        format($q$INSERT INTO payments (payment_number, transaction_id, flow, method, subtotal_amount, service_charge_amount, tax_amount, total_amount, cash_given, change_amount, cashier_id) VALUES ('PAY-F7', %L, 'payment_last', 'split', 10000, 500, 1050, 11550, 11550, 0, 'staff-cashier-01')$q$, v_open), '23514');
++    PERFORM t.fails('F8 diskon melebihi subtotal',
++        format($q$INSERT INTO payments (payment_number, transaction_id, flow, method, subtotal_amount, discount_amount, total_amount, cash_given, change_amount, cashier_id) VALUES ('PAY-F8', %L, 'payment_last', 'qris', 10000, 12000, 0, 0, 0, 'staff-cashier-01')$q$, v_open), '23514');
++    PERFORM t.fails('F9 struk pembayaran tanpa payment_id',
++        format($q$INSERT INTO print_tickets (ticket_number, transaction_id, type) VALUES ('RCP-F9', %L, 'receipt')$q$, v_open), '23514');
++    PERFORM t.fails('F10 struk dapur dengan payment_id',
++        format($q$INSERT INTO print_tickets (ticket_number, transaction_id, type, payment_id) VALUES ('TKT-F10', %L, 'kitchen', %L)$q$, v_open, v_pay), '23514');
++    PERFORM t.fails('F11 item pada batch yang belum ada',
++        format($q$INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal) VALUES (%L, 9, 'food-1', 'x', 'makanan', 'kitchen', 1, 1, 1)$q$, v_open), '23503');
++    PERFORM t.fails('F12 kuantitas nol',
++        format($q$INSERT INTO transaction_batches (transaction_id, batch_number) VALUES (%L, 1)$q$, v_open) || '; ' ||
++        format($q$INSERT INTO transaction_items (transaction_id, batch_number, menu_item_id, name, category, destination, unit_price, quantity, subtotal) VALUES (%L, 1, 'food-1', 'x', 'makanan', 'kitchen', 1, 0, 0)$q$, v_open), '23514');
++    PERFORM t.fails('F13 PIN ganda antar staf',
++        $q$INSERT INTO staff_accounts (id, name, role, pin_hash, nfc_tag_uid, avatar_color, role_label) SELECT 'staff-x', 'X', 'cashier', pin_hash, 'NFC-X', 'bg-x', 'X' FROM staff_accounts WHERE id = 'staff-cashier-01'$q$, '23505');
++    PERFORM t.fails('F14 UID NFC huruf kecil',
++        $q$INSERT INTO staff_accounts (id, name, role, pin_hash, nfc_tag_uid, avatar_color, role_label) VALUES ('staff-y', 'Y', 'cashier', repeat('a', 64), 'nfc-y', 'bg-x', 'Y')$q$, '23514');
++    PERFORM t.fails('F15 peran tidak dikenal',
++        $q$INSERT INTO staff_accounts (id, name, role, pin_hash, nfc_tag_uid, avatar_color, role_label) VALUES ('staff-z', 'Z', 'manager', repeat('b', 64), 'NFC-Z', 'bg-x', 'Z')$q$, '23503');
++    PERFORM t.fails('F16 stok bahan negatif',
++        $q$UPDATE raw_materials SET current_stock = -1 WHERE id = 'raw-beras'$q$, '23514');
++    PERFORM t.fails('F17 area meja tidak dikenal',
++        $q$INSERT INTO dining_tables (id, table_number, area, capacity) VALUES ('T99', '99', 'rooftop', 4)$q$, '23514');
++    PERFORM t.fails('F18 nomor meja ganda',
++        $q$INSERT INTO dining_tables (id, table_number, area, capacity) VALUES ('T98', '01', 'indoor', 4)$q$, '23505');
++    PERFORM t.fails('F19 diskon persen di atas 100',
++        $q$INSERT INTO discount_rules (code, name, kind, value) VALUES ('bad', 'bad', 'PERCENT', 150)$q$, '23514');
++    PERFORM t.fails('F20 satuan bahan tidak terdaftar',
++        $q$INSERT INTO raw_materials (id, name, unit, storage_zone) VALUES ('raw-x', 'X', 'galon', 'Dry Storage')$q$, '23503');
++    PERFORM t.fails('F21 transaksi yang sudah punya pembayaran tidak bisa dihapus',
++        format($q$DELETE FROM transactions WHERE id = %L$q$, v_tx), '23503');
++    PERFORM t.fails('F22 nama pramusaji ganda',
++        $q$INSERT INTO waiters (name) VALUES ('Siti Rahma')$q$, '23505');
++    PERFORM t.fails('F23 pengaturan restoran hanya satu baris',
++        $q$INSERT INTO restaurant_settings (singleton, restaurant_name, address, npwpd) VALUES (FALSE, 'x', 'y', 'z')$q$, '23514');
++END $$;
++
++-- ----------------------------------------------------------------------------
++-- G. View integritas harus mendeteksi data yang dirusak (dikembalikan lewat rollback)
++-- ----------------------------------------------------------------------------
++DO $$
++BEGIN
++    BEGIN
++        UPDATE transaction_items SET subtotal = subtotal + 1000
++        WHERE id = (SELECT id FROM transaction_items WHERE transaction_id = (SELECT id FROM transactions WHERE number = 'TRX-TEST-C'));
++        PERFORM t.eq('G1 subtotal item yang diubah terdeteksi', (SELECT COUNT(*) FROM v_integrity_item_subtotal), 1::BIGINT);
++        UPDATE payments SET tax_amount = tax_amount + 1, total_amount = total_amount + 1, cash_given = cash_given + 1, change_amount = change_amount
++        WHERE payment_number = 'PAY-TEST-C1';
++        PERFORM t.eq('G2 PB1 yang tidak sesuai rumus terdeteksi', (SELECT COUNT(*) FROM v_integrity_payment), 1::BIGINT);
++        RAISE EXCEPTION 'rollback_marker';
++    EXCEPTION WHEN OTHERS THEN
++        IF SQLERRM <> 'rollback_marker' THEN RAISE; END IF;
++    END;
++    PERFORM t.eq('G3 setelah rollback data kembali bersih', (SELECT COUNT(*) FROM v_integrity_item_subtotal) + (SELECT COUNT(*) FROM v_integrity_payment), 0::BIGINT);
++END $$;
++
++\echo 'SEMUA SKENARIO LULUS'
+diff --git a/db/tools/generate-erd.ts b/db/tools/generate-erd.ts
+new file mode 100644
+index 0000000..d24e280
+--- /dev/null
++++ b/db/tools/generate-erd.ts
+@@ -0,0 +1,313 @@
++// Membuat db/ERD.md (diagram Mermaid + daftar relasi) dan db/DATA_DICTIONARY.md (kamus data)
++// langsung dari skema yang sudah dimuat ke PostgreSQL, sehingga dokumen tidak bisa menyimpang
++// dari db/schema.sql.
++//
++//   PGDATABASE=gc_test bun db/tools/generate-erd.ts            # tulis file
++//   PGDATABASE=gc_test bun db/tools/generate-erd.ts --stdout   # cetak ERD.md saja (untuk pemeriksaan)
++//
++// Butuh psql di PATH dan database yang sudah berisi schema.sql (lihat db/tests/run.sh).
++import { spawnSync } from 'node:child_process';
++import { writeFileSync } from 'node:fs';
++import { fileURLToPath } from 'node:url';
++import { dirname, join } from 'node:path';
++
++const dbDir = join(dirname(fileURLToPath(import.meta.url)), '..');
++
++function sql<T>(query: string): T {
++  const r = spawnSync('psql', ['-X', '-At', '-v', 'ON_ERROR_STOP=1', '-c', query], { encoding: 'utf8' });
++  if (r.status !== 0) throw new Error(`psql gagal: ${r.stderr}`);
++  return JSON.parse(r.stdout.trim() || 'null') as T;
++}
++
++interface Col {
++  table: string; pos: number; name: string; type: string; notnull: boolean;
++  default: string | null; identity: boolean; comment: string | null;
++}
++interface Fk { table: string; name: string; cols: string[]; refTable: string; refCols: string[]; onDelete: string; }
++
++const tables = sql<{ name: string; comment: string | null }[]>(`
++  SELECT COALESCE(json_agg(json_build_object('name', c.relname, 'comment', obj_description(c.oid, 'pg_class')) ORDER BY c.relname), '[]')
++  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
++  WHERE n.nspname = 'public' AND c.relkind = 'r'`);
++
++const views = sql<string[]>(`
++  SELECT COALESCE(json_agg(c.relname ORDER BY c.relname), '[]')
++  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
++  WHERE n.nspname = 'public' AND c.relkind = 'v'`);
++
++const columns = sql<Col[]>(`
++  SELECT COALESCE(json_agg(json_build_object(
++    'table', c.relname, 'pos', a.attnum, 'name', a.attname,
++    'type', format_type(a.atttypid, a.atttypmod), 'notnull', a.attnotnull,
++    'default', pg_get_expr(d.adbin, d.adrelid), 'identity', a.attidentity <> '',
++    'comment', col_description(c.oid, a.attnum)) ORDER BY c.relname, a.attnum), '[]')
++  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
++  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
++  LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
++  WHERE n.nspname = 'public' AND c.relkind = 'r'`);
++
++const constraintCols = (kinds: string) => sql<{ table: string; name: string; cols: string[]; def: string }[]>(`
++  SELECT COALESCE(json_agg(json_build_object('table', c.relname, 'name', k.conname,
++    'cols', (SELECT json_agg(a.attname ORDER BY u.ord) FROM unnest(k.conkey) WITH ORDINALITY u(attnum, ord)
++             JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.attnum),
++    'def', pg_get_constraintdef(k.oid)) ORDER BY c.relname, k.conname), '[]')
++  FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
++  WHERE n.nspname = 'public' AND k.contype IN (${kinds})`);
++
++const pks = constraintCols(`'p'`);
++const uniques = constraintCols(`'u'`);
++const checks = constraintCols(`'c'`);
++
++const fks = sql<Fk[]>(`
++  SELECT COALESCE(json_agg(json_build_object('table', c.relname, 'name', k.conname,
++    'cols', (SELECT json_agg(a.attname ORDER BY u.ord) FROM unnest(k.conkey) WITH ORDINALITY u(attnum, ord)
++             JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.attnum),
++    'refTable', rc.relname,
++    'refCols', (SELECT json_agg(a.attname ORDER BY u.ord) FROM unnest(k.confkey) WITH ORDINALITY u(attnum, ord)
++                JOIN pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = u.attnum),
++    'onDelete', CASE k.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
++                                   WHEN 'n' THEN 'SET NULL' ELSE 'SET DEFAULT' END) ORDER BY c.relname, k.conname), '[]')
++  FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_class rc ON rc.oid = k.confrelid
++  JOIN pg_namespace n ON n.oid = c.relnamespace
++  WHERE n.nspname = 'public' AND k.contype = 'f'`);
++
++const indexes = sql<{ table: string; name: string; def: string; unique: boolean; partial: boolean; primary: boolean }[]>(`
++  SELECT COALESCE(json_agg(json_build_object('table', t.relname, 'name', i.relname, 'def', pg_get_indexdef(x.indexrelid),
++    'unique', x.indisunique, 'partial', x.indpred IS NOT NULL, 'primary', x.indisprimary) ORDER BY t.relname, i.relname), '[]')
++  FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_class t ON t.oid = x.indrelid
++  JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = 'public'`);
++
++// ---------------------------------------------------------------------------
++// Pemetaan tipe untuk tampilan
++// ---------------------------------------------------------------------------
++const shortType = (t: string): string =>
++  t.replace(/\(.*\)/, '')
++    .replace('character varying', 'varchar')
++    .replace('character', 'char')
++    .replace('timestamp with time zone', 'timestamptz')
++    .replace('double precision', 'float8')
++    .replace(/\s+/g, '_');
++
++const longType = (t: string): string =>
++  t.replace('character varying', 'VARCHAR').replace('timestamp with time zone', 'TIMESTAMPTZ')
++    .replace('character', 'CHAR').replace(/^numeric/, 'NUMERIC').replace(/^smallint/, 'SMALLINT')
++    .replace(/^integer/, 'INTEGER').replace(/^bigint/, 'BIGINT').replace(/^boolean/, 'BOOLEAN')
++    .replace(/^text/, 'TEXT').replace(/^uuid/, 'UUID').replace(/^date/, 'DATE');
++
++const pkOf = (t: string) => pks.find((p) => p.table === t)?.cols ?? [];
++const uniqueSets = (t: string): string[][] => [
++  ...pkOf(t).length ? [pkOf(t)] : [],
++  ...uniques.filter((u) => u.table === t).map((u) => u.cols),
++  // indeks unik penuh (tanpa WHERE) selain PK dan constraint
++  ...indexes.filter((i) => i.table === t && i.unique && !i.partial && !i.primary).map((i) => {
++    const m = i.def.match(/\(([^)]+)\)/);
++    return m ? m[1].split(',').map((s) => s.trim()) : [];
++  }),
++];
++const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
++
++// ---------------------------------------------------------------------------
++// ERD.md (Mermaid)
++// ---------------------------------------------------------------------------
++const fkColsOf = (t: string) => new Set(fks.filter((f) => f.table === t).flatMap((f) => f.cols));
++const uniqueSingle = (t: string) => new Set(uniqueSets(t).filter((s) => s.length === 1).map((s) => s[0]));
++
++const mer: string[] = ['erDiagram'];
++for (const tb of tables) {
++  mer.push(`    ${tb.name} {`);
++  for (const c of columns.filter((x) => x.table === tb.name)) {
++    const marks: string[] = [];
++    if (pkOf(tb.name).includes(c.name)) marks.push('PK');
++    if (fkColsOf(tb.name).has(c.name)) marks.push('FK');
++    if (uniqueSingle(tb.name).has(c.name) && !pkOf(tb.name).includes(c.name)) marks.push('UK');
++    mer.push(`        ${shortType(c.type)} ${c.name}${marks.length ? ' ' + marks.join(',') : ''}`);
++  }
++  mer.push('    }');
++}
++mer.push('');
++
++interface Rel { parent: string; child: string; label: string; optional: boolean; oneToOne: boolean; onDelete: string; fk: Fk }
++const rels: Rel[] = fks.map((f) => {
++  const childCols = columns.filter((c) => c.table === f.table && f.cols.includes(c.name));
++  const optional = childCols.some((c) => !c.notnull);
++  const oneToOne = uniqueSets(f.table).some((s) => sameSet(s, f.cols));
++  return { parent: f.refTable, child: f.table, label: f.cols.join('+'), optional, oneToOne, onDelete: f.onDelete, fk: f };
++});
++for (const r of rels) {
++  const left = r.optional ? '|o' : '||';
++  const right = r.oneToOne ? (r.optional ? 'o|' : 'o|') : 'o{';
++  mer.push(`    ${r.parent} ${left}--${right} ${r.child} : "${r.label}"`);
++}
++const mermaid = mer.join('\n');
++
++const VIEW_DOC: Record<string, string> = {
++  v_table_board: 'Field runtime Table (currentTransactionId, guestCount, openedAt, waiterName) dan status meja beserta bill aktifnya.',
++  v_transaction_summary: 'Transaction.isPaid, subtotal item, jumlah dibayar dan sisa tagihan per transaksi.',
++  v_kds_active_items: 'Antrean KDS: item yang belum dilayani dan belum diserahkan ke pramusaji (isKdsItemActive).',
++  v_waiter_pickup_items: 'Item yang sudah selesai di KDS dan menunggu dicentang pramusaji (isItemWaitingForWaiter).',
++  v_daily_settlement: 'Rekap harian: omzet, service charge, PB1, diskon, rincian per metode bayar (calculateFinanceMetrics).',
++  v_stock_status: 'Status stok dan nilai aset per bahan baku (buildInventorySheetRows).',
++  v_integrity_item_subtotal: 'Pemeriksaan: subtotal item harus sama dengan (harga + modifier) x jumlah. Harus kosong.',
++  v_integrity_payment: 'Pemeriksaan: subtotal, diskon, service charge, dan PB1 pada pembayaran harus sama dengan hitung ulang. Harus kosong.',
++};
++const missingDoc = views.filter((v) => !VIEW_DOC[v]);
++const staleDoc = Object.keys(VIEW_DOC).filter((v) => !views.includes(v));
++if (missingDoc.length || staleDoc.length) {
++  throw new Error(`VIEW_DOC tidak sinkron dengan skema. Belum didokumentasikan: [${missingDoc}] Tidak ada lagi: [${staleDoc}]`);
++}
++
++const card = (r: Rel) => {
++  const parentSide = r.optional ? '0..1' : '1';
++  const childSide = r.oneToOne ? (r.optional ? '0..1' : '1') : '0..N';
++  return `${parentSide} : ${childSide}`;
++};
++
++const erd: string[] = [];
++erd.push('# ERD Gastro-Cashier (RestoPOS Touch)');
++erd.push('');
++erd.push('> Dibuat otomatis oleh `db/tools/generate-erd.ts` dari skema yang dimuat ke PostgreSQL. Jangan diubah manual; ubah `db/schema.sql` lalu jalankan `db/tests/run.sh`.');
++erd.push('');
++erd.push(`Aplikasi saat ini hanya front-end (data di localStorage). Skema ini adalah bentuk relasional dari data itu: **${tables.length} tabel**, **${rels.length} relasi**, **${views.length} view**.`);
++erd.push('');
++erd.push('Notasi: `||` tepat satu, `|o` nol atau satu, `o{` nol atau banyak. Ujung induk ada di kiri. Kolom hanya diberi tanda PK, FK, UK; tipe lengkap, default, dan CHECK ada di [DATA_DICTIONARY.md](DATA_DICTIONARY.md).');
++erd.push('');
++erd.push('```mermaid');
++erd.push(mermaid);
++erd.push('```');
++erd.push('');
++erd.push('## Daftar relasi');
++erd.push('');
++erd.push('| Induk | Anak | Kolom FK | Kardinalitas (induk : anak) | ON DELETE |');
++erd.push('| --- | --- | --- | --- | --- |');
++for (const r of rels) {
++  erd.push(`| ${r.parent} (${r.fk.refCols.join(', ')}) | ${r.child} | ${r.fk.cols.join(', ')} | ${card(r)} | ${r.onDelete} |`);
++}
++erd.push('');
++erd.push('## View turunan');
++erd.push('');
++erd.push('Field di `src/types/pos.ts` yang sengaja tidak disimpan sebagai kolom karena bisa dihitung.');
++erd.push('');
++erd.push('| View | Fungsi |');
++erd.push('| --- | --- |');
++for (const v of views) erd.push(`| ${v} | ${VIEW_DOC[v]} |`);
++erd.push('');
++
++// ---------------------------------------------------------------------------
++// DATA_DICTIONARY.md
++// ---------------------------------------------------------------------------
++const esc = (s: string | null | undefined) => (s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
++
++const FINDINGS: { title: string; evidence: string; impact: string }[] = [
++  {
++    title: 'Semua data hanya di localStorage',
++    evidence: 'src/App.tsx:41-48 (delapan kunci resto_pos_*_v1), pembacaan di baris 422-481, penulisan di 532-575.',
++    impact: 'Tidak ada backend; skema ini adalah bentuk server dari data tersebut. Tanpa server, dua kasir di dua perangkat tidak berbagi data.',
++  },
++  {
++    title: 'PIN staf tersimpan polos',
++    evidence: 'src/utils/authRoles.ts:8, 17, 26 (pin: \'9999\', \'1234\', ...), diteruskan ke localStorage kunci resto_pos_staff_v1.',
++    impact: 'staff_accounts.pin_hash menyimpan HMAC-SHA256. Login memakai PIN saja tanpa id staf (authenticateByPin), maka pin_hash dibuat UNIQUE secara global.',
++  },
++  {
++    title: 'Nomor transaksi memakai angka acak 4 digit',
++    evidence: 'src/App.tsx:654 (TRX-<tanggal>-<1000..9999>) dan 763 (TRX-PF-...).',
++    impact: 'Dapat bentrok pada hari ramai. transactions.number dibuat UNIQUE; backend perlu urutan harian, bukan angka acak.',
++  },
++  {
++    title: 'Payment First menulis dua record, kadang dengan id sama',
++    evidence: 'src/App.tsx:763 membuat id lunas, dan App.tsx:833 (activeTxId = existingTx ? existingTx.id : settledTxId) memakainya lagi bila meja belum punya transaksi aktif.',
++    impact: 'Dimodelkan sebagai satu transactions dan banyak payments; payments.payment_number dipisah dari id transaksi.',
++  },
++  {
++    title: 'Nama kasir selalu "Budi Prasetyo"',
++    evidence: 'src/App.tsx:795, 875, 1107 dan src/services/googleSheets.ts:54.',
++    impact: 'payments.cashier_id mengacu ke akun yang sedang login; kode asli tidak mencatat kasir sebenarnya.',
++  },
++  {
++    title: 'Stok bahan dijepit ke nol dan dibulatkan 2 desimal',
++    evidence: 'src/utils/posCalculations.ts:262 (Math.max(0, Math.round(x * 100) / 100)).',
++    impact: 'Penjualan tidak pernah ditolak karena stok kurang, dan kekurangannya tidak tercatat. deduct_batch_stock mempertahankan perilaku ini tetapi mengembalikan kolom shortage; kolom disimpan 4 desimal.',
++  },
++  {
++    title: '5 dari 18 menu tidak punya resep',
++    evidence: 'src/data/initialData.ts: bev-4, bev-5, bev-6, snack-3, dessert-1 tanpa recipe.',
++    impact: 'Penjualannya tidak memotong stok. recipe_ingredients tidak memaksa setiap menu punya resep.',
++  },
++  {
++    title: 'Stok porsi menu hanya tampilan',
++    evidence: 'src/components/OrderModal.tsx:810 menampilkan item.stock; tidak ada pengurangan di kode.',
++    impact: 'menu_items.portion_stock disimpan apa adanya; stok nyata ada di raw_materials.',
++  },
++  {
++    title: 'Status dan metode yang ada di tipe tetapi tidak pernah dihasilkan',
++    evidence: "Table.status 'reserved' dan 'billing', Transaction.status 'cancelled', paymentMethod 'split': tidak ada pengisi di src selain src/types/pos.ts.",
++    impact: 'Tetap dimasukkan ke CHECK agar sama dengan tipe, kecuali "split" yang diganti banyak baris payments.',
++  },
++  {
++    title: 'Harga satuan dikirim dari klien',
++    evidence: 'src/components/OrderModal.tsx:142 dan 188 menyalin menuItem.price ke OrderItem.unitPrice di klien.',
++    impact: 'transaction_items.unit_price harus diisi server dari menu_items.price; view v_integrity_item_subtotal mendeteksi selisih.',
++  },
++  {
++    title: 'Data contoh memakai modifier yang tidak ada di menu',
++    evidence: "src/App.tsx:88 dan 135 (grup 'Es Batu').",
++    impact: 'transaction_item_modifiers menyimpan nama grup dan opsi sebagai teks (bukan id) agar riwayat tetap utuh.',
++  },
++];
++
++const dict: string[] = [];
++dict.push('# Kamus Data Gastro-Cashier');
++dict.push('');
++dict.push('> Dibuat otomatis oleh `db/tools/generate-erd.ts` dari skema PostgreSQL dan COMMENT di `db/schema.sql`. Jangan diubah manual.');
++dict.push('');
++dict.push('Tag `[src: Antarmuka.field]` pada keterangan kolom menunjuk field TypeScript di `src/types/pos.ts` yang menjadi sumbernya. `db/tests/check-coverage.ts` memastikan setiap field di `pos.ts` punya kolom atau tercatat sebagai turunan di `db/field-map.json`.');
++dict.push('');
++dict.push('## Temuan perilaku kode yang mempengaruhi desain');
++dict.push('');
++dict.push('Hal-hal yang ditemukan saat membaca kode (commit d091435) dan menentukan bentuk skema. Setiap temuan sudah dicocokkan dengan baris kodenya.');
++dict.push('');
++dict.push('| # | Temuan | Bukti | Dampak pada skema |');
++dict.push('| --- | --- | --- | --- |');
++FINDINGS.forEach((f, i) => dict.push(`| ${i + 1} | ${esc(f.title)} | ${esc(f.evidence)} | ${esc(f.impact)} |`));
++dict.push('');
++dict.push('## Tabel');
++dict.push('');
++for (const tb of tables) {
++  dict.push(`### ${tb.name}`);
++  dict.push('');
++  dict.push(esc(tb.comment));
++  dict.push('');
++  const pk = pkOf(tb.name);
++  dict.push(`Kunci utama: ${pk.map((c) => '`' + c + '`').join(', ')}`);
++  dict.push('');
++  dict.push('| Kolom | Tipe | Null | Default | Relasi | Keterangan |');
++  dict.push('| --- | --- | --- | --- | --- | --- |');
++  for (const c of columns.filter((x) => x.table === tb.name)) {
++    const fkTo = fks.filter((f) => f.table === tb.name && f.cols.includes(c.name))
++      .map((f) => `${f.refTable}(${f.refCols.join(', ')})`).join('; ');
++    const def = c.identity ? 'identity' : (c.default ?? '');
++    dict.push(`| ${c.name} | ${longType(c.type)} | ${c.notnull ? 'tidak' : 'ya'} | ${esc(def)} | ${esc(fkTo)} | ${esc(c.comment)} |`);
++  }
++  dict.push('');
++  const tChecks = checks.filter((k) => k.table === tb.name);
++  const tUniq = uniques.filter((k) => k.table === tb.name);
++  const tIdx = indexes.filter((i) => i.table === tb.name && !i.primary);
++  if (tChecks.length || tUniq.length || tIdx.length) {
++    dict.push('Aturan dan indeks:');
++    dict.push('');
++    for (const k of tChecks) dict.push(`- \`${k.name}\`: \`${k.def}\``);
++    for (const k of tUniq) dict.push(`- \`${k.name}\`: \`${k.def}\``);
++    for (const i of tIdx.filter((x) => !uniques.some((u) => u.table === x.table && u.name === x.name))) {
++      dict.push(`- \`${i.name}\`: \`${i.def.replace(/^CREATE (UNIQUE )?INDEX \S+ ON public\./, (_m, u) => (u ? 'UNIQUE ' : '') + '')}\``);
++    }
++    dict.push('');
++  }
++}
++
++if (process.argv.includes('--stdout')) {
++  process.stdout.write(erd.join('\n'));
++} else {
++  writeFileSync(join(dbDir, 'ERD.md'), erd.join('\n'));
++  writeFileSync(join(dbDir, 'DATA_DICTIONARY.md'), dict.join('\n'));
++  console.log(`ERD.md: ${tables.length} tabel, ${rels.length} relasi, ${views.length} view; DATA_DICTIONARY.md: ${columns.length} kolom`);
++}
+diff --git a/db/tools/generate-seed.ts b/db/tools/generate-seed.ts
+new file mode 100644
+index 0000000..8a6ae22
+--- /dev/null
++++ b/db/tools/generate-seed.ts
+@@ -0,0 +1,137 @@
++// Membuat db/seed.sql dari data yang sudah ada di kode, agar seed tidak menyimpang dari aplikasi.
++//   bun db/tools/generate-seed.ts > db/seed.sql
++// Hanya data master: meja, bahan baku, menu + modifier + resep, akun staf, pramusaji,
++// peran, aturan diskon, dan pengaturan. Transaksi contoh di App.tsx (INITIAL_TRANSACTIONS)
++// tidak ikut, sehingga semua meja berstatus available.
++import { createHmac } from 'node:crypto';
++import { readFileSync } from 'node:fs';
++import { fileURLToPath } from 'node:url';
++import { dirname, join } from 'node:path';
++import { INITIAL_TABLES, RAW_MATERIALS, MENU_ITEMS } from '../../src/data/initialData';
++import { DEFAULT_STAFF_ACCOUNTS, getRolePermissions } from '../../src/utils/authRoles';
++import { SERVICE_CHARGE_RATE, PB1_TAX_RATE } from '../../src/utils/posCalculations';
++import type { UserRole } from '../../src/types/pos';
++
++const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
++
++// PIN hanya untuk demo. Produksi: pepper dari variabel lingkungan server, bukan dari repo.
++export const DEMO_PIN_PEPPER = 'demo-pepper-ganti-di-produksi';
++export const pinHash = (pin: string): string =>
++  createHmac('sha256', DEMO_PIN_PEPPER).update(pin).digest('hex');
++
++const q = (v: string | null | undefined): string =>
++  v === null || v === undefined ? 'NULL' : `'${v.replace(/'/g, "''")}'`;
++const n = (v: number | undefined): string => (v === undefined ? 'NULL' : String(v));
++const b = (v: boolean | undefined): string => (v ? 'TRUE' : 'FALSE');
++
++// Daftar pramusaji ada sebagai <option> di OrderModal.tsx (belum ada di data terpisah)
++function readWaiterNames(): string[] {
++  const src = readFileSync(join(root, 'src/components/OrderModal.tsx'), 'utf8');
++  const start = src.indexOf('id="waiterSelect"');
++  const end = src.indexOf('</select>', start);
++  if (start < 0 || end < 0) throw new Error('select#waiterSelect tidak ditemukan di OrderModal.tsx');
++  return [...src.slice(start, end).matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
++}
++
++const out: string[] = [];
++const emit = (s = '') => out.push(s);
++
++emit('-- DIBUAT OTOMATIS oleh db/tools/generate-seed.ts dari src/data/initialData.ts, src/utils/authRoles.ts,');
++emit('-- src/utils/posCalculations.ts, dan src/components/OrderModal.tsx. Jangan diubah manual.');
++emit('-- Data demo: PIN dihash dengan pepper demo; ganti di produksi.');
++emit();
++
++emit('INSERT INTO restaurant_settings (restaurant_name, address, npwpd, service_charge_rate, pb1_rate, service_in_pb1_base, payment_flow_mode) VALUES');
++emit(`    (${q('RESTO NUSANTARA INDAH')}, ${q('Jl. Kuliner Rasa No. 88, Jakarta Selatan')}, ${q('01.345.678.9-012.000')}, ${SERVICE_CHARGE_RATE}, ${PB1_TAX_RATE}, TRUE, 'payment_last');`);
++emit();
++
++const units = [...new Set(['kg', 'gram', 'liter', 'ml', 'butir', 'ekor', 'ikat', ...RAW_MATERIALS.map((m) => m.unit)])];
++emit('INSERT INTO units (code, label) VALUES');
++emit(units.map((u) => `    (${q(u)}, ${q(u)})`).join(',\n') + ';');
++emit();
++
++const roles: UserRole[] = ['owner', 'cashier', 'finance'];
++emit('INSERT INTO roles (code, can_operate_pos, can_access_kds, can_access_checker, can_access_inventory, can_access_finance, can_access_owner_dashboard, can_manage_petty_cash, can_reset_demo) VALUES');
++emit(
++  roles
++    .map((r) => {
++      const p = getRolePermissions(r);
++      return `    (${q(r)}, ${b(p.canOperatePOS)}, ${b(p.canAccessKds)}, ${b(p.canAccessChecker)}, ${b(p.canAccessInventory)}, ${b(p.canAccessFinance)}, ${b(p.canAccessOwnerDashboard)}, ${b(p.canManagePettyCash)}, ${b(p.canResetDemo)})`;
++    })
++    .join(',\n') + ';'
++);
++emit();
++
++emit('INSERT INTO staff_accounts (id, name, role, pin_hash, nfc_tag_uid, avatar_color, role_label) VALUES');
++emit(
++  DEFAULT_STAFF_ACCOUNTS.map(
++    (s) => `    (${q(s.id)}, ${q(s.name)}, ${q(s.role)}, ${q(pinHash(s.pin))}, ${q(s.nfcTagUid.toUpperCase())}, ${q(s.avatarColor)}, ${q(s.roleLabel)})`
++  ).join(',\n') + ';'
++);
++emit();
++
++const waiterNames = readWaiterNames();
++emit('INSERT INTO waiters (name, staff_id) VALUES');
++emit(
++  waiterNames
++    .map((name) => {
++      const acct = DEFAULT_STAFF_ACCOUNTS.find((s) => s.name === name);
++      return `    (${q(name)}, ${q(acct?.id)})`;
++    })
++    .join(',\n') + ';'
++);
++emit();
++
++// computeDiscountAmount(): member10 = 10%, promo20k = Rp20.000 maksimum sebesar subtotal
++emit('INSERT INTO discount_rules (code, name, kind, value) VALUES');
++emit(`    ('member10', 'Diskon Member 10%', 'PERCENT', 10),`);
++emit(`    ('promo20k', 'Promo Potongan Rp20.000', 'FIXED', 20000);`);
++emit();
++
++emit('INSERT INTO dining_tables (id, table_number, area, capacity, status) VALUES');
++emit(INITIAL_TABLES.map((t) => `    (${q(t.id)}, ${q(t.tableNumber)}, ${q(t.area)}, ${t.capacity}, 'available')`).join(',\n') + ';');
++emit();
++
++emit('INSERT INTO raw_materials (id, name, unit, current_stock, min_stock, cost_per_unit, storage_zone) VALUES');
++emit(
++  RAW_MATERIALS.map(
++    (m) => `    (${q(m.id)}, ${q(m.name)}, ${q(m.unit)}, ${m.currentStock}, ${m.minStock}, ${m.costPerUnit}, ${q(m.storageZone)})`
++  ).join(',\n') + ';'
++);
++emit();
++
++emit('INSERT INTO menu_items (id, name, category, destination, price, cost, portion_stock, image_url, description) VALUES');
++emit(
++  MENU_ITEMS.map(
++    (m) => `    (${q(m.id)}, ${q(m.name)}, ${q(m.category)}, ${q(m.destination)}, ${m.price}, ${m.cost}, ${m.stock}, ${q(m.image)}, ${q(m.description)})`
++  ).join(',\n') + ';'
++);
++emit();
++
++const groupRows: string[] = [];
++const optionRows: string[] = [];
++MENU_ITEMS.forEach((m) => {
++  (m.modifierGroups ?? []).forEach((g, gi) => {
++    groupRows.push(`    (${q(m.id)}, ${q(g.id)}, ${q(g.name)}, ${b(g.required)}, ${gi})`);
++    g.options.forEach((o, oi) => {
++      optionRows.push(
++        `    ((SELECT id FROM modifier_groups WHERE menu_item_id = ${q(m.id)} AND code = ${q(g.id)}), ${q(o.name)}, ${n(o.priceDelta ?? 0)}, ${oi})`
++      );
++    });
++  });
++});
++emit('INSERT INTO modifier_groups (menu_item_id, code, name, is_required, sort_order) VALUES');
++emit(groupRows.join(',\n') + ';');
++emit();
++emit('INSERT INTO modifier_options (group_id, name, price_delta, sort_order) VALUES');
++emit(optionRows.join(',\n') + ';');
++emit();
++
++const recipeRows: string[] = [];
++MENU_ITEMS.forEach((m) =>
++  (m.recipe ?? []).forEach((r) => recipeRows.push(`    (${q(m.id)}, ${q(r.rawMaterialId)}, ${r.amount})`))
++);
++emit('INSERT INTO recipe_ingredients (menu_item_id, raw_material_id, amount) VALUES');
++emit(recipeRows.join(',\n') + ';');
++
++process.stdout.write(out.join('\n') + '\n');
+-- 
+2.43.0
+
