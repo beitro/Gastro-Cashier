@@ -1,3 +1,13 @@
+/**
+ * Waiter/checker UI for tracking dishes from KDS handoff through table service.
+ *
+ * Lists occupied tables, shows per-item kitchen/handoff/served status, and sends
+ * serving confirmations through parent callbacks. The parent owns transaction
+ * updates; isItemWaitingForWaiter supplies the shared domain predicate.
+ *
+ * Keep this component focused on waiter workflow and display. Printing, KDS
+ * transitions, and durable transaction persistence remain outside this UI layer.
+ */
 import React, { useState } from 'react';
 import { Table, Transaction, OrderItem } from '../types/pos';
 import { isItemWaitingForWaiter } from '../utils/posCalculations';
