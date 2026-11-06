@@ -1,3 +1,17 @@
+/**
+ * Settlement UI for an active POS transaction.
+ *
+ * Displays billable items, applies the available demo discount choices, calculates
+ * the settlement breakdown, and submits the cashier's settlement intent to the
+ * parent through onCompleteSettlement.
+ *
+ * Payment scope: cash handling is local demo logic. QRIS and card/EDC selections
+ * are demo placeholders and do not represent provider/bank authorization. Do not
+ * mark a real-world digital payment as paid based on this UI selection; provider
+ * integration and verified payment state are owned by the product team.
+ *
+ * Financial calculation rules are delegated to posCalculations.
+ */
 import React, { useState } from 'react';
 import { Table, Transaction } from '../types/pos';
 import { formatRupiah, calculateChange, computeSettlementBreakdown } from '../utils/posCalculations';
