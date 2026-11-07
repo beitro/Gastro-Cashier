@@ -1,0 +1,37 @@
+name: PostgreSQL 15 cloud environment smoke test
+
+on:
+  push:
+    branches:
+      - infra/postgres15-ci
+  workflow_dispatch:
+
+jobs:
+  postgres15:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gastro_cashier_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gastro_cashier_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Verify PostgreSQL is ready
+        env:
+          PG_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: docker exec "$PG_CONTAINER_ID" pg_isready -U postgres -d gastro_cashier_test
+      - name: Verify PostgreSQL major version is 15+
+        env:
+          PG_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          VERSION_NUM="$(docker exec "$PG_CONTAINER_ID" psql -U postgres -d gastro_cashier_test -Atc 'SHOW server_version_num')"
+          echo "PostgreSQL server_version_num=$VERSION_NUM"
+          test "$VERSION_NUM" -ge 150000
