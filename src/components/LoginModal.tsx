@@ -323,7 +323,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               {/* Virtual NFC Cards for Immediate Touch Testing */}
               <div className="space-y-2">
                 <span className="text-[11px] font-black uppercase tracking-wider text-slate-600 block px-1">
-                  Kartu NFC Staff Terdaftar (Sentuh untuk Tap):
+                  Perangkat NFC terhubung. Kartu harus didaftarkan oleh administrator:
                 </span>
 
                 <div className="grid grid-cols-1 gap-2.5">
