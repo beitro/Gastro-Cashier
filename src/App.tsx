@@ -22,6 +22,7 @@ import {
   isItemWaitingForWaiter,
 } from './utils/posCalculations';
 import { DEFAULT_STAFF_ACCOUNTS } from './utils/authRoles';
+import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, nextBatchNumber, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
 
 import { Navbar, NavTabId } from './components/Navbar';
@@ -422,7 +423,7 @@ export default function App() {
   const [tables, setTables] = useState<Table[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TABLES);
-      if (saved) return JSON.parse(saved);
+      if (saved) return migrateTables(JSON.parse(saved));
     } catch {}
     return INITIAL_TABLES;
   });
@@ -430,7 +431,7 @@ export default function App() {
   const [activeTransactions, setActiveTransactions] = useState<Record<string, Transaction>>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
-      if (saved) return JSON.parse(saved);
+      if (saved) return migrateTransactions(JSON.parse(saved));
     } catch {}
     return INITIAL_TRANSACTIONS;
   });
@@ -719,7 +720,7 @@ export default function App() {
             items: newItems,
           },
         ],
-        allCurrentItems: newItems,
+        allCurrentItems: stampedItems,
         subtotal: totals.subtotal,
         serviceChargeRate: 0.05,
         serviceChargeAmount: totals.serviceChargeAmount,
@@ -840,7 +841,7 @@ export default function App() {
       paymentMethod,
       cashGiven,
       changeAmount,
-      cashierName: 'Budi Prasetyo',
+      cashierName: currentStaff.name,
     };
 
     // 1. Record Omzet & PB1 immediately
@@ -920,7 +921,7 @@ export default function App() {
         paymentMethod,
         cashGiven,
         changeAmount,
-        cashierName: 'Budi Prasetyo',
+        cashierName: currentStaff.name,
       };
 
       setActiveTransactions((prev) => ({
