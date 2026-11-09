@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'schema.sql'
+      - 'db/migrations/**'
       - 'scripts/db-*.mjs'
       - 'package.json'
       - '.github/workflows/database-safety.yml'
