@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Transaction, OrderItem } from '../types/pos';
+import { Transaction } from '../types/pos';
 import { MENU_ITEMS } from '../data/initialData';
 import { formatRupiah } from '../utils/posCalculations';
-import { ShieldCheck, RotateCcw, Ban, Package, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, RotateCcw, Package, AlertTriangle } from 'lucide-react';
 
 export interface CancellationRequest {
   id: string;
@@ -22,14 +22,13 @@ interface MenuStockControlProps {
   transactions: Record<string, Transaction>;
   requests: CancellationRequest[];
   isManager: boolean;
-  currentStaffName: string;
   onRequestCancellation: (request: Omit<CancellationRequest, 'id' | 'requestedAt' | 'requestedBy'>) => void;
   onApproveCancellation: (requestId: string) => void;
   onRejectCancellation: (requestId: string) => void;
 }
 
 export const MenuStockControl: React.FC<MenuStockControlProps> = ({
-  menuStock, transactions, requests, isManager, currentStaffName,
+  menuStock, transactions, requests, isManager,
   onRequestCancellation, onApproveCancellation, onRejectCancellation,
 }) => {
   const [reasonByItem, setReasonByItem] = useState<Record<string, string>>({});
