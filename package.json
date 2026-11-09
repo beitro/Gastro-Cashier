@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit",
     "server": "node server/index.mjs",
     "db:check": "node scripts/db-check.mjs",
-    "db:migrate": "node scripts/db-migrate.mjs"
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "db:provision-runtime-role": "node scripts/db-provision-runtime-role.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
