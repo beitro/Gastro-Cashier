@@ -21,8 +21,7 @@ import {
   countWaiterPickupItems,
   isItemWaitingForWaiter,
 } from './utils/posCalculations';
-import { DEFAULT_STAFF_ACCOUNTS } from './utils/authRoles';
-import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, nextBatchNumber, appendBatch } from './utils/auditFlow';
+import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
 
 import { Navbar, NavTabId } from './components/Navbar';
@@ -439,7 +438,7 @@ export default function App() {
   const [settledTransactions, setSettledTransactions] = useState<Transaction[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_SETTLED);
-      if (saved) return migrateTables(JSON.parse(saved));
+      if (saved) return JSON.parse(saved);
     } catch {}
     return [];
   });
@@ -447,7 +446,7 @@ export default function App() {
   const [allPrintTickets, setAllPrintTickets] = useState<PrintTicket[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TICKETS);
-      if (saved) return migrateTransactions(JSON.parse(saved));
+      if (saved) return JSON.parse(saved);
     } catch {}
     return [];
   });
@@ -1342,6 +1341,8 @@ export default function App() {
             }}
             onOpenPayment={(table) => {
               sounds.playTapSound();
+              const access = assertTableAccess(currentStaff, table, activeTransactions);
+              if (!access.ok) { window.alert(access.message); return; }
               setPaymentModalTable(table);
             }}
             onOpenChecker={(table) => {
