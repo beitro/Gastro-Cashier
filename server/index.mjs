@@ -65,7 +65,7 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
 
 async function authenticate(req, res, next) {
   try {
-    const token = (req.get('authorization') || '').replace(/^Bearer\\s+/i,'');
+    const token = (req.get('authorization') || '').replace(/^Bearer\s+/i,'');
     if (!token) return res.status(401).json({ error:'Sesi login diperlukan.' });
     const tokenHash = sha256(token);
     const auth = await transaction(async c => {
@@ -114,7 +114,7 @@ async function issueSession(staffId, credentialColumn, credential, res) {
 
 app.post('/api/auth/pin', asyncRoute(async (req,res) => {
   const pin = String(req.body?.pin || '');
-  if (!/^\\d{4,8}$/.test(pin)) return res.status(400).json({ error:'PIN harus 4–8 digit.' });
+  if (!/^\d{4,8}$/.test(pin)) return res.status(400).json({ error:'PIN harus 4–8 digit.' });
   const candidates = await transaction(async c => { await c.query("SELECT set_config('app.auth_lookup','true',true)"); return c.query("SELECT id,pin_hash FROM staff_accounts WHERE status='active' AND pin_hash IS NOT NULL"); });
   const found = [];
   for (const row of candidates.rows) if (await verifyCredential(pin,row.pin_hash)) found.push(row);
