@@ -54,3 +54,19 @@ See `server/README.md` for bootstrap and endpoint details. Bearer tokens are cur
 - Run runtime-role tests with the exact privileges used by the API. The optional restricted runtime-role provisioning from the earlier foundation is intentionally not enabled here because the current API authentication queries still require staff credential/membership reads.
 - Validate every endpoint under a non-owner, non-BYPASSRLS database role with transaction-local tenant/outlet context.
 - Add end-to-end tests for authentication, authorization, order concurrency, payment idempotency, and stock transactions.
+
+## Required runtime-role hardening
+
+Never point the API's `DATABASE_URL` at `neondb_owner` or another table-owning/superuser role. Create a dedicated API login with `NOSUPERUSER NOBYPASSRLS NOINHERIT`, then use it for `DATABASE_URL`:
+
+```bash
+ADMIN_DATABASE_URL='postgresql://admin:...@.../gastro_cashier?sslmode=require' \
+RUNTIME_DB_PASSWORD='a-long-random-secret-at-least-24-characters' \
+npm run db:provision-runtime-role
+```
+
+The provisioning script grants only the API's current SELECT/INSERT/UPDATE table operations and verifies role attributes. Keep `ADMIN_DATABASE_URL` out of the API runtime environment. `BOOTSTRAP_DATABASE_URL` is a separate, temporary privileged connection used only by the token-protected one-time bootstrap endpoint; remove it after provisioning.
+
+For an existing database, back it up and manually review/apply `db/migrations/002_rls_runtime_hardening.sql` as the schema owner. It enables and forces RLS on staff credentials and sessions, changes `v_table_board` to invoker security, and adds explicit pre-authentication policies. Do not run the fresh-install baseline against an existing Neon database.
+
+PIN/NFC authentication uses a transaction-local `app.auth_lookup` flag only for the credential lookup and membership resolution. Bearer-session validation first sets `app.session_token_hash`, which exposes only the matching session, then sets tenant/outlet context. These custom settings are intended for the trusted API process; do not expose runtime database credentials to browsers or arbitrary SQL clients.
