@@ -131,7 +131,10 @@ app.post('/api/auth/nfc', asyncRoute(async (req,res) => {
   return issueSession(found[0].id,'nfc_credential_hash',uid,res);
 }));
 app.post('/api/auth/logout', authenticate, asyncRoute(async (req,res) => {
-  await scoped(req, c => c.query('UPDATE staff_sessions SET revoked_at=now() WHERE token_hash=$1 AND revoked_at IS NULL',[req.tokenHash]));
+  await transaction(async c => {
+    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true),set_config('app.session_token_hash',$3,true)",[req.auth.tenant_id,req.auth.outlet_id,req.tokenHash]);
+    return c.query('UPDATE staff_sessions SET revoked_at=now() WHERE token_hash=$1 AND revoked_at IS NULL',[req.tokenHash]);
+  });
   res.json({ ok:true });
 }));
 app.get('/api/me', authenticate, (req,res) => {
