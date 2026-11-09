@@ -35,7 +35,7 @@ export const FloorPlanGrid: React.FC<FloorPlanGridProps> = ({
   onReprintPaidReceipt,
 }) => {
   const [selectedArea, setSelectedArea] = useState<'all' | 'indoor' | 'outdoor' | 'vip'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'occupied'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'occupied' | 'reserved'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTableAction, setActiveTableAction] = useState<Table | null>(null);
 
@@ -64,7 +64,7 @@ export const FloorPlanGrid: React.FC<FloorPlanGridProps> = ({
 
   const handleTableClick = (table: Table) => {
     onSelectTable(table);
-    if (table.status === 'available') {
+    if (table.status === 'available' || table.status === 'reserved') {
       onOpenOrder(table);
     } else {
       setActiveTableAction(table);
@@ -173,7 +173,8 @@ export const FloorPlanGrid: React.FC<FloorPlanGridProps> = ({
       {/* 36-Table Spacious Touchscreen Claymorphism Matrix */}
       <div className="flex-1 min-h-0 overflow-y-auto px-1 py-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5 sm:gap-4 content-start">
         {filteredTables.map((table) => {
-          const isOccupied = table.status === 'occupied';
+          const isOccupied = table.status === 'occupied' || table.status === 'billing';
+          const isReserved = table.status === 'reserved';
           const currentTx = table.currentTransactionId
             ? transactions[table.currentTransactionId]
             : null;
@@ -190,7 +191,7 @@ export const FloorPlanGrid: React.FC<FloorPlanGridProps> = ({
               type="button"
               onClick={() => handleTableClick(table)}
               className={`min-h-[154px] sm:min-h-[168px] p-4 sm:p-4.5 flex flex-col justify-between text-left cursor-pointer select-none ${
-                isOccupied ? 'clay-table-occupied' : 'clay-table-available'
+                isOccupied ? 'clay-table-occupied' : isReserved ? 'clay-table-reserved' : 'clay-table-available'
               }`}
             >
               {/* Top Row: Large Table Number & Status Indicator */}
@@ -216,7 +217,7 @@ export const FloorPlanGrid: React.FC<FloorPlanGridProps> = ({
                         : 'bg-black/22 text-white'
                     }`}
                   >
-                    {isOccupied ? (currentTx?.isPaid ? 'TERISI • LUNAS' : 'TERISI') : 'KOSONG'}
+                    {isOccupied ? (currentTx?.isPaid ? 'TERISI • LUNAS' : 'TERISI') : isReserved ? 'RESERVED' : 'KOSONG'}
                   </span>
                   <span
                     className={`text-xs font-extrabold font-mono tabular-nums ${
