@@ -135,7 +135,7 @@ CREATE TABLE inventory_items (
  reorder_level NUMERIC(16,4) NOT NULL DEFAULT 0 CHECK(reorder_level>=0),
  average_unit_cost NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK(average_unit_cost>=0), storage_zone VARCHAR(48), is_active BOOLEAN NOT NULL DEFAULT TRUE,
  FOREIGN KEY(tenant_id,outlet_id) REFERENCES outlets(tenant_id,id) ON DELETE RESTRICT,
- UNIQUE(tenant_id,outlet_id,id), UNIQUE(tenant_id,outlet_id,sku)
+ UNIQUE(tenant_id,id), UNIQUE(tenant_id,outlet_id,id), UNIQUE(tenant_id,outlet_id,sku)
 );
 CREATE TABLE recipes (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID NOT NULL, outlet_id UUID, menu_item_id UUID NOT NULL,
