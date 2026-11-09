@@ -48,6 +48,10 @@ export function authenticateByPin(
     return { success: false, error: 'Masukkan PIN 4 digit Anda.' };
   }
 
+  if (cleanPin.length !== 4 || !/^\d{4}$/.test(cleanPin)) {
+    return { success: false, error: 'PIN harus tepat 4 digit angka.' };
+  }
+
   const found = staffList.find((s) => s.pin === cleanPin);
   if (!found) {
     return { success: false, error: 'PIN tidak terdaftar. Periksa kembali PIN Anda.' };
@@ -81,6 +85,8 @@ export interface RolePermissions {
   canAccessKds: boolean;
   canAccessChecker: boolean;
   canAccessInventory: boolean;
+  /** Hanya owner yang dapat menyetujui pembatalan dan pengembalian stok. */
+  canApproveCancellation: boolean;
   canAccessFinance: boolean;
   canAccessOwnerDashboard: boolean;
   canManagePettyCash: boolean;
@@ -98,6 +104,7 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canAccessKds: true,
         canAccessChecker: true,
         canAccessInventory: true,
+        canApproveCancellation: true,
         canAccessFinance: true,
         canAccessOwnerDashboard: true,
         canManagePettyCash: true,
@@ -109,6 +116,7 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canAccessKds: false,
         canAccessChecker: false,
         canAccessInventory: true,
+        canApproveCancellation: false,
         canAccessFinance: true,
         canAccessOwnerDashboard: false,
         canManagePettyCash: true,
@@ -120,7 +128,8 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canOperatePOS: true,
         canAccessKds: true,
         canAccessChecker: true,
-        canAccessInventory: false,
+        canAccessInventory: true, // view stock + request cancellation
+        canApproveCancellation: false,
         canAccessFinance: false,
         canAccessOwnerDashboard: false,
         canManagePettyCash: false,
