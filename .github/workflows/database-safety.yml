@@ -39,6 +39,15 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
           CONFIRM_EMPTY_DATABASE_MIGRATION: YES
         run: npm run db:migrate
+      - name: Provision and verify least-privilege API role (ephemeral CI database)
+        env:
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+          RUNTIME_DB_PASSWORD: ci-runtime-password-with-more-than-24-characters
+        run: npm run db:provision-runtime-role
+      - name: Verify API runtime role can connect without bypassing RLS
+        env:
+          DATABASE_URL: postgresql://gastro_runtime:ci-runtime-password-with-more-than-24-characters@localhost:5432/gastro_test
+        run: node -e "import('pg').then(async ({default:pg})=>{const c=new pg.Client({connectionString:process.env.DATABASE_URL});await c.connect();const r=await c.query('select current_user, rolsuper, rolbypassrls from pg_roles where rolname=current_user');if(r.rows[0].rolsuper||r.rows[0].rolbypassrls)throw new Error('runtime role bypasses RLS');await c.end();})"
       - name: Verify tenant isolation, outlet scope, idempotency and concurrency
         timeout-minutes: 3
         env:
