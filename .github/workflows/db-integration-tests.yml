@@ -1,0 +1,45 @@
+name: Database tenant isolation and concurrency tests
+
+on:
+  pull_request:
+    paths:
+      - 'schema.sql'
+      - 'scripts/db-*.mjs'
+      - '.github/workflows/db-integration-tests.yml'
+  push:
+    branches:
+      - feat/neon-postgres-safe-foundation
+
+jobs:
+  tenant-isolation-and-concurrency:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gastro_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gastro_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-package-lock
+      - name: Apply baseline to isolated PostgreSQL test database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+          CONFIRM_EMPTY_DATABASE_MIGRATION: YES
+        run: npm run db:migrate
+      - name: Test tenant RLS, outlet scope, idempotency, and concurrent sessions
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: node scripts/db-integration-safety.mjs
