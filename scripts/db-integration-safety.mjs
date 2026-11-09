@@ -5,9 +5,9 @@ const { Client } = pg;
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
 const opts = { connectionString, connectionTimeoutMillis: 10000, statement_timeout: 15000, query_timeout: 20000 };
-const admin = new Client(opts), runtime = new Client(opts);
+const admin = new Client(opts), runtime = new Client(opts), contender = new Client(opts);
 const phase = name => console.log(`[db-safety] ${name}`);
-const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), sessionA:randomUUID() };
+const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
 const slug = randomUUID().replaceAll('-','').slice(0,16);
 async function assertDenied(client, sql, values, label) {
   await client.query('SAVEPOINT rls_guard');
@@ -37,7 +37,7 @@ try {
   const ms = await admin.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'owner'),($3,$4,'owner') RETURNING id,tenant_id",[ids.tenantA,ids.staffA,ids.tenantB,ids.staffB]);
   const ma = ms.rows.find(x=>x.tenant_id===ids.tenantA);
   await admin.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'owner')",[ids.tenantA,ids.outletA,ma.id]);
-  await admin.query("INSERT INTO staff_sessions(id,staff_id,tenant_id,outlet_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour')",[ids.sessionA,ids.staffA,ids.tenantA,ids.outletA,`token-${slug}`]);
+  await admin.query("INSERT INTO staff_sessions(id,staff_id,tenant_id,outlet_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour')",[ids.staffSessionA,ids.staffA,ids.tenantA,ids.outletA,`token-${slug}`]);
   await admin.query('COMMIT');
 
   phase('verify deny-by-default without tenant context');
@@ -58,7 +58,7 @@ try {
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await runtime.query("SELECT set_config('app.session_token_hash',$1,true)",[ `token-${slug}` ]);
   const session = await runtime.query('SELECT id FROM staff_sessions');
-  if (session.rowCount !== 1 || session.rows[0].id !== ids.sessionA) throw new Error('Session token policy did not isolate a single session');
+  if (session.rowCount !== 1 || session.rows[0].id !== ids.staffSessionA) throw new Error('Session token policy did not isolate a single session');
   await runtime.query('ROLLBACK');
 
   phase('verify tenant/outlet isolation including security-invoker view');
@@ -84,16 +84,35 @@ try {
   if ((await runtime.query('SELECT id FROM dining_tables')).rowCount !== 0) throw new Error('Wrong outlet context exposed rows');
   await runtime.query('ROLLBACK');
 
+  phase('verify concurrent open-session uniqueness');
+  await contender.connect();
+  await admin.query('BEGIN');
+  await admin.query("INSERT INTO dining_sessions(id,tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES($1,$2,$3,$4,$5,2,'active')",[ids.diningSessionA,ids.tenantA,ids.outletA,ids.tableA,`SA-${slug}`]);
+  await contender.query('BEGIN');
+  const competing = contender.query("INSERT INTO dining_sessions(id,tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES($1,$2,$3,$4,$5,2,'active')",[ids.diningSessionB,ids.tenantA,ids.outletA,ids.tableA,`SB-${slug}`]);
+  await new Promise(resolve=>setTimeout(resolve,150));
+  await admin.query('COMMIT');
+  let duplicateSessionDenied=false;
+  try { await competing; await contender.query('COMMIT'); } catch(error) { duplicateSessionDenied=error.code==='23505'; await contender.query('ROLLBACK').catch(()=>{}); }
+  if(!duplicateSessionDenied) throw new Error('Concurrent second open session was not rejected');
+  phase('verify idempotency-key uniqueness');
+  await admin.query('INSERT INTO idempotency_keys(tenant_id,outlet_id,key,operation) VALUES($1,$2,$3,$4)',[ids.tenantA,ids.outletA,`idem-${slug}`,'safety-test']);
+  let duplicateKeyDenied=false;
+  try { await admin.query('INSERT INTO idempotency_keys(tenant_id,outlet_id,key,operation) VALUES($1,$2,$3,$4)',[ids.tenantA,ids.outletA,`idem-${slug}`,'safety-test']); } catch(error) { duplicateKeyDenied=error.code==='23505'; }
+  if(!duplicateKeyDenied) throw new Error('Duplicate idempotency key was accepted');
+
   phase('all RLS assertions passed');
-  console.log(JSON.stringify({tests:'passed',rls:{allTablesForceRls:true,noContextDenied:true,explicitAuthLookup:true,tokenScopedSessions:true,tenantIsolation:true,outletIsolation:true,crossTenantWriteDenied:true,crossOutletWriteDenied:true,viewSecurityInvoker:true,staffScope:true}},null,2));
+  console.log(JSON.stringify({tests:'passed',rls:{allTablesForceRls:true,noContextDenied:true,explicitAuthLookup:true,tokenScopedSessions:true,tenantIsolation:true,outletIsolation:true,crossTenantWriteDenied:true,crossOutletWriteDenied:true,viewSecurityInvoker:true,staffScope:true}, concurrency:{oneOpenSessionPerTable:duplicateSessionDenied}, idempotency:{duplicateKeyRejected:duplicateKeyDenied}},null,2));
 } finally {
   await runtime.query('ROLLBACK').catch(()=>{});
-  await admin.query('DELETE FROM staff_sessions WHERE id=$1',[ids.sessionA]).catch(()=>{});
+  await admin.query('DELETE FROM idempotency_keys WHERE tenant_id=$1 AND outlet_id=$2',[ids.tenantA,ids.outletA]).catch(()=>{});
+  await admin.query('DELETE FROM dining_sessions WHERE id=ANY($1::uuid[])',[[ids.diningSessionA,ids.diningSessionB]]).catch(()=>{});
+  await admin.query('DELETE FROM staff_sessions WHERE id=$1',[ids.staffSessionA]).catch(()=>{});
   await admin.query('DELETE FROM outlet_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM tenant_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM staff_accounts WHERE id=ANY($1::uuid[])',[[ids.staffA,ids.staffB]]).catch(()=>{});
   await admin.query('DELETE FROM dining_tables WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM outlets WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM tenants WHERE id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
-  await Promise.all([runtime.end().catch(()=>{}),admin.end().catch(()=>{})]);
+  await Promise.all([runtime.end().catch(()=>{}),contender.end().catch(()=>{}),admin.end().catch(()=>{})]);
 }
