@@ -7,7 +7,7 @@ if (!connectionString) throw new Error('DATABASE_URL is required');
 const opts = { connectionString, connectionTimeoutMillis: 10000, statement_timeout: 15000, query_timeout: 20000 };
 const admin = new Client(opts), runtime = new Client(opts), contender = new Client(opts);
 const phase = name => console.log(`[db-safety] ${name}`);
-const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
+const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
 const slug = randomUUID().replaceAll('-','').slice(0,16);
 async function assertDenied(client, sql, values, label) {
   await client.query('SAVEPOINT rls_guard');
@@ -32,7 +32,7 @@ try {
   await admin.query('BEGIN');
   await admin.query('INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3),($4,$5,$6)',[ids.tenantA,`rls-a-${slug}`,'Tenant A',ids.tenantB,`rls-b-${slug}`,'Tenant B']);
   await admin.query('INSERT INTO outlets(id,tenant_id,slug,name) VALUES($1,$2,$3,$4),($5,$6,$7,$8),($9,$10,$11,$12)',[ids.outletA,ids.tenantA,'outlet-a','Outlet A',ids.outletOtherA,ids.tenantA,'outlet-a2','Outlet A2',ids.outletB,ids.tenantB,'outlet-b','Outlet B']);
-  await admin.query('INSERT INTO dining_tables(id,tenant_id,outlet_id,table_code,display_name,capacity) VALUES($1,$2,$3,$4,$5,2),($6,$7,$8,$9,$10,2)',[ids.tableA,ids.tenantA,ids.outletA,'A-1','Table A',ids.tableB,ids.tenantB,ids.outletB,'B-1','Table B']);
+  await admin.query('INSERT INTO dining_tables(id,tenant_id,outlet_id,table_code,display_name,capacity) VALUES($1,$2,$3,$4,$5,2),($6,$7,$8,$9,$10,2),($11,$12,$13,$14,$15,2)',[ids.tableA,ids.tenantA,ids.outletA,'A-1','Table A',ids.tableB,ids.tenantB,ids.outletB,'B-1','Table B',ids.tableOtherA,ids.tenantA,ids.outletOtherA,'A2-1','Table A2']);
   await admin.query('INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4),($5,$6,$7,$8)',[ids.staffA,`a-${slug}@test.invalid`,'Staff A','scrypt$00$00',ids.staffB,`b-${slug}@test.invalid`,'Staff B','scrypt$00$00']);
   const ms = await admin.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'owner'),($3,$4,'owner') RETURNING id,tenant_id",[ids.tenantA,ids.staffA,ids.tenantB,ids.staffB]);
   const ma = ms.rows.find(x=>x.tenant_id===ids.tenantA);
@@ -88,6 +88,25 @@ try {
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletOtherA]);
   if ((await runtime.query('SELECT id FROM dining_tables')).rowCount !== 0) throw new Error('Wrong outlet context exposed rows');
+  await runtime.query('ROLLBACK');
+
+  phase('verify the provisioned gastro_runtime role with production grants');
+  await admin.query('GRANT gastro_runtime TO CURRENT_USER');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
+  const currentRole=await runtime.query('SELECT current_user,rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user');
+  if(currentRole.rows[0].current_user!=='gastro_runtime'||currentRole.rows[0].rolsuper||currentRole.rows[0].rolbypassrls||currentRole.rows[0].rolinherit) throw new Error('Provisioned runtime role attributes are unsafe');
+  if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==0 || (await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Production runtime role leaked pre-auth data without context');
+  await runtime.query("SELECT set_config('app.auth_lookup','true',true)");
+  if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==2) throw new Error('Production runtime role cannot perform explicit PIN/NFC lookup');
+  if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Auth lookup exposed production sessions');
+  await runtime.query("SELECT set_config('app.session_token_hash',$1,true)",[ `token-${slug}` ]);
+  if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==1) throw new Error('Production runtime token lookup failed');
+  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  if((await runtime.query('SELECT table_id FROM v_table_board')).rowCount!==1) throw new Error('Production runtime role cannot read the secured table-board view');
+  if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==1) throw new Error('Production runtime staff tenant isolation failed');
+  if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==1) throw new Error('Production runtime session token scope changed unexpectedly');
+  await assertDenied(runtime,"INSERT INTO dining_sessions(tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES($1,$2,$3,$4,2,'active')",[ids.tenantB,ids.outletB,ids.tableB,`bad-runtime-tenant-${slug}`],'Production runtime cross-tenant write');
+  await assertDenied(runtime,"INSERT INTO dining_sessions(tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES($1,$2,$3,$4,2,'active')",[ids.tenantA,ids.outletOtherA,ids.tableOtherA,`bad-runtime-outlet-${slug}`],'Production runtime cross-outlet write');
   await runtime.query('ROLLBACK');
 
   phase('verify concurrent open-session uniqueness');
