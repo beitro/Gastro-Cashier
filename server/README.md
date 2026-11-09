@@ -36,9 +36,16 @@ The PIN must be 4–8 digits. Bootstrap stores a salted scrypt hash, not the raw
 - `POST /api/auth/logout` — revoke current bearer session.
 - `GET /api/me` — current staff, tenant, and outlet context.
 - `GET /api/tables` — current outlet table board, protected by RLS transaction context.
+- `GET /api/menu` — available outlet/global menu catalog.
+- `GET /api/sessions` — active/billing table sessions.
+- `POST /api/sessions` — open a table session; validates table capacity and prevents concurrent open sessions.
+- `GET /api/sessions/:sessionId/orders` — list order batches and items for a session.
+- `POST /api/sessions/:sessionId/orders` — create a submitted order batch; menu prices and names are loaded server-side.
+- `PATCH /api/order-items/:itemId/kitchen-status` — update KDS status (`queue`, `cooking`, `ready`, `handed_off`, `cancelled`).
+- `POST /api/sessions/:sessionId/payments` — settle a session in one database transaction, allocate payment to items, close session, and enforce an idempotency key.
 
 Bearer token is stored in browser localStorage for this initial integration stage. Use HTTPS in production and move the token to a Secure, HttpOnly, SameSite cookie before public deployment.
 
 ## Current integration boundary
 
-PIN/NFC authentication and the table-board read path are database-backed. The remaining POS write paths (session open/close, order batches and KDS updates, payments/refunds, inventory movements, petty cash, and finance reporting) still need to be migrated from localStorage into transactional API endpoints before this app can be considered fully multi-device or production-ready. Do not treat browser localStorage as a shared or authoritative database.
+The backend now exposes the core API building blocks for authentication, menu, tables, sessions, order batches, KDS status, and full-session settlement. The current React screens have not yet been switched wholesale to these endpoints; some existing POS state, refunds, inventory movements, petty cash, and finance reporting still use browser storage. Complete UI data hydration, refund/inventory/finance endpoints, runtime-role RLS validation, and integration tests before production or multi-device use. Do not treat browser localStorage as a shared or authoritative database.
