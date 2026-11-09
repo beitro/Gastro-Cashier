@@ -101,10 +101,11 @@ try {
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Auth lookup exposed production sessions');
   await runtime.query("SELECT set_config('app.session_token_hash',$1,true)",[ `token-${slug}` ]);
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==1) throw new Error('Production runtime token lookup failed');
+  await runtime.query("SELECT set_config('app.auth_lookup','false',true),set_config('app.session_token_hash','',true)");
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Tenant/outlet context alone enumerated production sessions');
   if((await runtime.query('SELECT table_id FROM v_table_board')).rowCount!==1) throw new Error('Production runtime role cannot read the secured table-board view');
   if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==1) throw new Error('Production runtime staff tenant isolation failed');
-  if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==1) throw new Error('Production runtime session token scope changed unexpectedly');
   await assertDenied(runtime,"INSERT INTO dining_sessions(tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES($1,$2,$3,$4,2,'active')",[ids.tenantB,ids.outletB,ids.tableB,`bad-runtime-tenant-${slug}`],'Production runtime cross-tenant write');
   await assertDenied(runtime,"INSERT INTO dining_sessions(tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES($1,$2,$3,$4,2,'active')",[ids.tenantA,ids.outletOtherA,ids.tableOtherA,`bad-runtime-outlet-${slug}`],'Production runtime cross-outlet write');
   await runtime.query('ROLLBACK');
