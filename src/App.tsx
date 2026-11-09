@@ -660,116 +660,44 @@ export default function App() {
 
   // FLOW 1 (EXISTING): PAYMENT LAST (BAYAR BELAKANG) — OPEN TABLE & SEND TO KITCHEN/BAR
   const handleSubmitOrder = (params: {
-    table: Table;
-    guestCount: number;
-    waiterName: string;
-    newItems: OrderItem[];
-    batchNumber: number;
+    table: Table; guestCount: number; waiterName: string; newItems: OrderItem[]; batchNumber: number;
   }) => {
-    const { table, guestCount, waiterName, batchNumber } = params;
+    const { table, guestCount, waiterName } = params;
+    if (!currentStaff || !canOperatePOS(currentStaff)) { window.alert('Role Anda tidak diizinkan mengoperasikan POS.'); return; }
     if (!reserveMenuStock(params.newItems)) return;
-    const newItems = params.newItems.map((item) => ({ ...item, isPaid: false }));
     const now = new Date().toISOString();
-
+    const baseTx = table.currentTransactionId ? activeTransactions[table.currentTransactionId] : undefined;
     let transaction: Transaction;
-    const existingTxId = table.currentTransactionId;
-    const existingTx = existingTxId ? activeTransactions[existingTxId] : null;
+    let stampedNewItems: OrderItem[];
+    let batchNumber: number;
 
-    if (existingTx) {
-      const updatedBatches: OrderBatch[] = [
-        ...existingTx.batches,
-        {
-          batchNumber,
-          timestamp: now,
-          items: newItems,
-        },
-      ];
-      const mergedItems = [...existingTx.allCurrentItems, ...newItems];
-      const totals = calculateOrderTotals(mergedItems, existingTx.discountAmount);
-
-      transaction = {
-        ...existingTx,
-        paymentFlow: 'payment_last',
-        isPaid: false,
-        batches: updatedBatches,
-        allCurrentItems: mergedItems,
-        subtotal: totals.subtotal,
-        serviceChargeAmount: totals.serviceChargeAmount,
-        taxAmount: totals.taxAmount,
-        totalAmount: totals.totalAmount,
-      };
+    if (baseTx) {
+      const appended = appendBatch(baseTx, params.newItems.map(i => ({ ...i, isPaid: false })), currentStaff);
+      transaction = appended;
+      batchNumber = appended.nextBatchNumber! - 1;
+      stampedNewItems = appended.batches[appended.batches.length - 1].items;
+      const totals = calculateOrderTotals(appended.allCurrentItems, appended.discountAmount);
+      transaction = { ...appended, paymentFlow: 'payment_last', isPaid: false, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount };
     } else {
-      const newTxId = `TRX-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
-      const totals = calculateOrderTotals(newItems);
-
-      transaction = {
-        id: newTxId,
-        tableId: table.id,
-        tableNumber: table.tableNumber,
-        area: table.area,
-        guestCount,
-        waiterName,
-        openedAt: now,
-        status: 'active',
-        paymentFlow: 'payment_last',
-        isPaid: false,
-        batches: [
-          {
-            batchNumber: 1,
-            timestamp: now,
-            items: newItems,
-          },
-        ],
-        allCurrentItems: stampedItems,
-        subtotal: totals.subtotal,
-        serviceChargeRate: 0.05,
-        serviceChargeAmount: totals.serviceChargeAmount,
-        taxRate: 0.1,
-        taxAmount: totals.taxAmount,
-        discountAmount: 0,
-        totalAmount: totals.totalAmount,
-      };
+      const created = createSession(table, currentStaff, guestCount, activeTransactions);
+      if (!created.ok) { window.alert(created.message); return; }
+      const appended = appendBatch(created.transaction, params.newItems.map(i => ({ ...i, isPaid: false })), currentStaff);
+      transaction = { ...appended, waiterName, outletId: table.outletId || currentStaff.outletId };
+      batchNumber = appended.nextBatchNumber! - 1;
+      stampedNewItems = appended.batches[appended.batches.length - 1].items;
+      const totals = calculateOrderTotals(appended.allCurrentItems);
+      transaction = { ...transaction, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount };
     }
 
-    const newTickets = generatePrintTickets({
-      transaction,
-      batchItems: newItems,
-      batchNumber,
-      type: 'order',
-    });
-
-    setTables((prev) =>
-      prev.map((t) =>
-        t.id === table.id
-          ? {
-              ...t,
-              status: 'occupied',
-              currentTransactionId: transaction.id,
-              guestCount,
-              waiterName,
-              openedAt: t.openedAt || now,
-            }
-          : t
-      )
-    );
-
-    setActiveTransactions((prev) => ({
-      ...prev,
-      [transaction.id]: transaction,
-    }));
-
-    setAllPrintTickets((prev) => [...newTickets, ...prev]);
-
-    setRawMaterials((prevMaterials) => deductRecipeMaterials(newItems, prevMaterials, MENU_ITEMS).updatedMaterials);
-
+    const newTickets = generatePrintTickets({ transaction, batchItems: stampedNewItems, batchNumber, type: 'order' });
+    setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: 'occupied', currentTransactionId: transaction.id, guestCount, waiterName, openedAt: t.openedAt || now, outletId: transaction.outletId, sessionVersion: transaction.sessionVersion } : t));
+    setActiveTransactions(prev => ({ ...prev, [transaction.id]: transaction }));
+    setAllPrintTickets(prev => [...newTickets, ...prev]);
+    setRawMaterials(prev => deductRecipeMaterials(stampedNewItems, prev, MENU_ITEMS).updatedMaterials);
     setOrderModalTable(null);
     setPrinterModalTickets(newTickets);
     setShowPrinterModal(true);
-
-    if (soundEnabled) {
-      sounds.playPrinterSound();
-      setTimeout(() => sounds.playBellSound(), 350);
-    }
+    if (soundEnabled) { sounds.playPrinterSound(); setTimeout(() => sounds.playBellSound(), 350); }
   };
 
   // FLOW 2 (NEW): PAYMENT FIRST (LANGSUNG BAYAR DI DEPAN) — SETTLE IMMEDIATELY + PRINT RECEIPT & KITCHEN/BAR/CHECKER
@@ -1037,7 +965,7 @@ export default function App() {
   };
 
   const handleRejectCancellation = (requestId: string) => {
-    if (currentStaff?.role !== 'owner') {
+    if (!canApproveCancellation(currentStaff)) {
       window.alert('Hanya Outlet Manager (role Owner pada demo) yang dapat memproses pembatalan.');
       return;
     }
@@ -1199,7 +1127,7 @@ export default function App() {
       paymentMethod,
       cashGiven,
       changeAmount,
-      cashierName: 'Budi Prasetyo',
+      cashierName: currentStaff?.name || 'Staff',
       discountAmount,
       subtotal: totals.subtotal,
       serviceChargeAmount: totals.serviceChargeAmount,
