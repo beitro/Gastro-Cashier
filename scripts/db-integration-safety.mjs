@@ -61,6 +61,12 @@ try {
   if (session.rowCount !== 1 || session.rows[0].id !== ids.staffSessionA) throw new Error('Session token policy did not isolate a single session');
   await runtime.query('ROLLBACK');
 
+  phase('verify tenant context alone cannot enumerate staff sessions');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  if ((await runtime.query('SELECT id FROM staff_sessions')).rowCount !== 0) throw new Error('Tenant context alone exposed staff sessions');
+  await runtime.query('ROLLBACK');
+
   phase('verify tenant/outlet isolation including security-invoker view');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
