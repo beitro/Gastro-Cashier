@@ -29,6 +29,7 @@ try {
   }
   const result=await client.query('SELECT rolname,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolinherit FROM pg_roles WHERE rolname=$1',[roleName]);
   const role=result.rows[0];
-  if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolinherit) throw new Error('Runtime role privilege verification failed.');
+  const ownership=await client.query("SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') AND c.relowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_objects, EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_schema, EXISTS(SELECT 1 FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS has_memberships",[roleName]);
+  if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolinherit || ownership.rows[0].owns_objects || ownership.rows[0].owns_schema || ownership.rows[0].has_memberships) throw new Error('Runtime role must be non-owner, NOSUPERUSER, NOBYPASSRLS, NOINHERIT and have no role memberships.');
   console.log(JSON.stringify({provisioned:true,role:role.rolname,superuser:role.rolsuper,bypassRls:role.rolbypassrls,inherit:role.rolinherit},null,2));
 } finally { await client.end().catch(()=>{}); }
