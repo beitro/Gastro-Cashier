@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: gastro-cashier-postgres15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gastro_cashier
+      POSTGRES_USER: gastro
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-local-password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - gastro_postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gastro -d gastro_cashier"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+volumes:
+  gastro_postgres_data:

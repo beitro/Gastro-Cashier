@@ -1,0 +1,75 @@
+name: PostgreSQL 15 schema smoke test
+
+on:
+  push:
+    branches:
+      - feat/postgres15-multitenant-schema-erd
+  pull_request:
+    paths:
+      - 'schema.sql'
+      - 'ERD.md'
+      - 'db/**'
+      - '.github/workflows/postgres15-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  postgres15:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gastro_cashier_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gastro_cashier_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply schema to clean PostgreSQL 15
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d gastro_cashier_test -v ON_ERROR_STOP=1 -f schema.sql
+      - name: Assert schema contracts
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          psql -h localhost -U postgres -d gastro_cashier_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE n integer;
+          BEGIN
+            SELECT count(*) INTO n FROM information_schema.tables
+            WHERE table_schema='public' AND table_type='BASE TABLE';
+            IF n < 25 THEN RAISE EXCEPTION 'Expected at least 25 base tables, got %', n; END IF;
+            IF to_regclass('public.v_table_board') IS NULL THEN RAISE EXCEPTION 'Missing v_table_board'; END IF;
+            IF to_regclass('public.uq_one_open_session_per_table') IS NULL THEN RAISE EXCEPTION 'Missing one-open-session constraint'; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname='audit_logs' AND relrowsecurity) THEN RAISE EXCEPTION 'RLS not enabled on audit_logs'; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_logs_immutable' AND NOT tgisinternal) THEN RAISE EXCEPTION 'Missing immutable audit trigger'; END IF;
+          END $$;
+          SELECT current_setting('server_version') AS postgres_version;
+          SELECT count(*) AS tables FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';
+          SQL
+      - name: Verify audit log rejects updates
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d gastro_cashier_test -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO tenants (slug, name) VALUES ('ci-tenant', 'CI Tenant');
+          INSERT INTO audit_logs (tenant_id, action, entity_type)
+          SELECT id, 'ci.test', 'schema' FROM tenants WHERE slug='ci-tenant';
+          DO $$
+          BEGIN
+            BEGIN
+              UPDATE audit_logs SET action='tampered' WHERE action='ci.test';
+              RAISE EXCEPTION 'Audit update unexpectedly succeeded';
+            EXCEPTION WHEN raise_exception THEN
+              IF SQLERRM = 'Audit update unexpectedly succeeded' THEN RAISE; END IF;
+            END;
+          END $$;
+          SQL
