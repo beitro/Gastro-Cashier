@@ -8,7 +8,18 @@ In Neon Console, select the intended project, branch, database, and role. Copy t
 
 Set `DATABASE_URL` in the server's secret/environment configuration. For local development, put it in an ignored `.env` file (never commit it).
 
-## 2. Read-only inspection
+## 2. Optional GitHub Actions connection check
+
+In repository Settings → Secrets and variables → Actions:
+
+- Add secret `NEON_DATABASE_URL` containing the pooled Neon connection string.
+- Add repository variable `ENABLE_NEON_READONLY_CHECK` with value `true`.
+
+The opt-in workflow then runs `npm run db:check` against Neon. It only reads database metadata and lists table names; it does not create, alter, or delete anything. Do not place the URL in workflow YAML or commit it.
+
+For an application hosting provider, configure the same connection string separately as the server runtime variable `DATABASE_URL`. A GitHub Actions secret is not automatically injected into a deployed application.
+
+## 3. Read-only inspection
 
 Install dependencies and inspect the target:
 
