@@ -54,6 +54,10 @@ try {
   if (visibleA.rowCount !== 1 || visibleA.rows[0].id !== ids.tableA) {
     throw new Error(`Tenant A saw unexpected rows: ${visibleA.rowCount}`);
   }
+  const visibleBoard = await a.query('SELECT table_id FROM v_table_board');
+  if (visibleBoard.rowCount !== 1 || visibleBoard.rows[0].table_id !== ids.tableA) {
+    throw new Error('The table-board view bypassed tenant RLS');
+  }
 
   await a.query('SAVEPOINT cross_tenant_write');
   let crossTenantWriteDenied = false;
