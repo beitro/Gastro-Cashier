@@ -218,7 +218,7 @@ app.post('/api/sessions/:sessionId/payments', authenticate, asyncRoute(async (re
     const payment=(await c.query(`INSERT INTO payments(tenant_id,outlet_id,session_id,receipt_number,method,card_bank,subtotal_amount,discount_amount,service_charge_amount,tax_amount,total_amount,cash_received,change_amount,cashier_staff_id,idempotency_key)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,receipt,method,cardBank||null,subtotal,discount,service,tax,total,received,received-total,req.auth.staff_id,idempotencyKey])).rows[0];
-    for(const item of items.rows) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5)',[req.auth.tenant_id,req.auth.outlet_id,payment.id,item.id,Number(item.line_total)]);
+    for(const item of items.rows) if(Number(item.line_total)>0) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5)',[req.auth.tenant_id,req.auth.outlet_id,payment.id,item.id,Number(item.line_total)]);
     await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     return {status:201,body:payment};
   });
