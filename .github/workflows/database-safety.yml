@@ -40,6 +40,10 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
           CONFIRM_EMPTY_DATABASE_MIGRATION: YES
         run: npm run db:migrate
+      - name: Verify incremental RLS hardening migration is repeatable
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: node --input-type=module -e "import {readFile} from 'node:fs/promises'; import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const sql=await readFile('db/migrations/002_rls_runtime_hardening.sql','utf8'); await c.query(sql); await c.query(sql); await c.end();"
       - name: Provision and verify least-privilege API role (ephemeral CI database)
         env:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
