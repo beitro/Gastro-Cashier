@@ -10,7 +10,9 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "start": "node server/index.mjs",
-    "start:dev": "node --watch server/index.mjs"
+    "start:dev": "node --watch server/index.mjs",
+    "db:check": "node scripts/db-check.mjs",
+    "db:migrate": "node scripts/db-migrate.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -36,6 +38,7 @@
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "@types/express": "^4.17.21",
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "@types/pg": "^8.15.5"
   }
 }
