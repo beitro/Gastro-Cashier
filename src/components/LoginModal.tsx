@@ -19,6 +19,9 @@ import {
   Scan,
 } from 'lucide-react';
 
+const MAX_PIN_ATTEMPTS = 5;
+const LOCK_DURATION_MS = 30_000;
+
 interface LoginModalProps {
   currentStaff: StaffAccount | null;
   onLoginSuccess: (staff: StaffAccount) => void;
@@ -37,6 +40,29 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [isNfcScanning, setIsNfcScanning] = useState(false);
   const [nfcSuccessAnimation, setNfcSuccessAnimation] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'pin' | 'nfc'>('pin');
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [lockUntil, setLockUntil] = useState<number | null>(null);
+  const [lockRemainingSec, setLockRemainingSec] = useState(0);
+  const isPinLocked = lockUntil !== null && Date.now() < lockUntil;
+
+  useEffect(() => {
+    if (!lockUntil) {
+      setLockRemainingSec(0);
+      return;
+    }
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((lockUntil - Date.now()) / 1000));
+      setLockRemainingSec(left);
+      if (left <= 0) {
+        setLockUntil(null);
+        setFailedAttempts(0);
+        setErrorMessage(null);
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [lockUntil]);
 
   // Handle hardware Web NFC if available on Android Chrome
   useEffect(() => {
@@ -68,6 +94,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   }, [activeTab]);
 
   const handleKeyPress = (num: string) => {
+    if (isPinLocked) return;
     sounds.playTapSound();
     setErrorMessage(null);
     if (pin.length < 4) {
@@ -80,28 +107,44 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   };
 
   const handleDelete = () => {
+    if (isPinLocked) return;
     sounds.playTapSound();
     setPin((prev) => prev.slice(0, -1));
     setErrorMessage(null);
   };
 
   const handleClear = () => {
+    if (isPinLocked) return;
     sounds.playTapSound();
     setPin('');
     setErrorMessage(null);
   };
 
   const verifyEnteredPin = (inputPin: string) => {
+    if (isPinLocked) {
+      setErrorMessage('Terlalu banyak percobaan. Coba lagi dalam ' + lockRemainingSec + 's.');
+      setPin('');
+      return;
+    }
     const result = authenticateByPin(inputPin);
     if (result.success && result.staff) {
       sounds.playBellSound();
+      setFailedAttempts(0);
+      setLockUntil(null);
       setNfcSuccessAnimation(`Selamat datang, ${result.staff.name}!`);
       setTimeout(() => {
         onLoginSuccess(result.staff!);
       }, 400);
     } else {
       sounds.playTapSound();
-      setErrorMessage(result.error || 'PIN tidak valid');
+      const nextFails = failedAttempts + 1;
+      setFailedAttempts(nextFails);
+      if (nextFails >= MAX_PIN_ATTEMPTS) {
+        setLockUntil(Date.now() + LOCK_DURATION_MS);
+        setErrorMessage('PIN salah ' + MAX_PIN_ATTEMPTS + 'x. Input dikunci ' + (LOCK_DURATION_MS / 1000) + ' detik.');
+      } else {
+        setErrorMessage((result.error || 'PIN tidak valid') + ' · Sisa percobaan: ' + (MAX_PIN_ATTEMPTS - nextFails));
+      }
       setTimeout(() => {
         setPin('');
       }, 600);
@@ -112,6 +155,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     const result = authenticateByNfc(tagUid);
     if (result.success && result.staff) {
       sounds.playBellSound();
+      setFailedAttempts(0);
+      setLockUntil(null);
       setNfcSuccessAnimation(`NFC Terdeteksi: ${result.staff.name} (${result.staff.roleLabel})`);
       setTimeout(() => {
         onLoginSuccess(result.staff!);
@@ -123,6 +168,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   };
 
   const handleQuickDemoStaff = (staff: StaffAccount) => {
+    if (isPinLocked) return;
     sounds.playTapSound();
     setPin(staff.pin);
     verifyEnteredPin(staff.pin);
@@ -150,7 +196,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </div>
           </div>
 
-          {canCancel && onCancel && (
+          {canCancel && onCancel && !isPinLocked && (
             <button
               type="button"
               onClick={onCancel}
@@ -200,6 +246,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </button>
           </div>
 
+          {isPinLocked && (
+            <div className="clay-tint-rose p-3 rounded-xl flex items-center gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-700 shrink-0" />
+              <span className="text-xs font-black text-rose-900">Input PIN dikunci · coba lagi dalam {lockRemainingSec}s</span>
+            </div>
+          )}
+
           {/* TAB 1: PIN NUMERIC KEYPAD */}
           {activeTab === 'pin' && (
             <div className="space-y-4">
@@ -235,6 +288,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     key={digit}
                     type="button"
                     onClick={() => handleKeyPress(digit)}
+                    disabled={isPinLocked}
                     className="h-14 clay-btn-neutral text-xl font-black text-slate-900 flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
                   >
                     {digit}
@@ -244,6 +298,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <button
                   type="button"
                   onClick={handleClear}
+                  disabled={isPinLocked}
                   className="h-14 clay-btn-neutral text-xs font-black text-rose-700 uppercase flex items-center justify-center cursor-pointer"
                 >
                   Clear
@@ -252,6 +307,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleKeyPress('0')}
+                  disabled={isPinLocked}
                   className="h-14 clay-btn-neutral text-xl font-black text-slate-900 flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
                 >
                   0
@@ -260,6 +316,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <button
                   type="button"
                   onClick={handleDelete}
+                  disabled={isPinLocked}
                   className="h-14 clay-btn-neutral text-slate-700 flex items-center justify-center cursor-pointer"
                   aria-label="Hapus satu angka"
                 >
@@ -369,6 +426,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleQuickDemoStaff(DEFAULT_STAFF_ACCOUNTS[0])}
+                disabled={isPinLocked}
                 className="clay-btn-neutral min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer"
               >
                 <Crown className="w-3.5 h-3.5 text-amber-600" />
@@ -378,6 +436,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleQuickDemoStaff(DEFAULT_STAFF_ACCOUNTS[1])}
+                disabled={isPinLocked}
                 className="clay-btn-neutral min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer"
               >
                 <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
@@ -387,6 +446,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleQuickDemoStaff(DEFAULT_STAFF_ACCOUNTS[2])}
+                disabled={isPinLocked}
                 className="clay-btn-neutral min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer"
               >
                 <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
@@ -396,7 +456,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           </div>
 
           {/* Error Feedback */}
-          {errorMessage && (
+          {errorMessage && !isPinLocked && (
             <div className="clay-tint-rose p-3 rounded-xl flex items-center gap-2.5 animate-bounce">
               <AlertCircle className="w-4 h-4 text-rose-700 shrink-0" />
               <span className="text-xs font-black text-rose-900">{errorMessage}</span>
