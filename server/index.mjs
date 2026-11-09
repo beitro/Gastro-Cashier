@@ -267,6 +267,20 @@ app.use((err, _req, res, _next) => {
   console.error('[api]', err.message);
   res.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Terjadi kesalahan server.' : err.message });
 });
+async function assertSafeRuntimeRole() {
+  const result = await pool.query(`
+    SELECT r.rolsuper,r.rolbypassrls,r.rolinherit,
+      EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') AND c.relowner=r.oid) AS owns_public_objects,
+      EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=r.oid) AS owns_public_schema,
+      EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_role_memberships
+    FROM pg_roles r WHERE r.rolname=current_user
+  `);
+  const role=result.rows[0];
+  if (!role || role.rolsuper || role.rolbypassrls || role.rolinherit || role.owns_public_objects || role.owns_public_schema || role.has_role_memberships) {
+    throw new Error('Unsafe DATABASE_URL role. API requires a dedicated non-owner role with NOSUPERUSER, NOBYPASSRLS, NOINHERIT and no privileged role memberships.');
+  }
+}
+await assertSafeRuntimeRole();
 const port=Number(process.env.PORT || 8080);
 const server=app.listen(port,'0.0.0.0',()=>console.log('Gastro-Cashier API listening on '+port));
 async function shutdown(){server.close();await pool.end();await bootstrapPool?.end();process.exit(0);}
