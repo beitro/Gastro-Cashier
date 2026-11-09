@@ -31,6 +31,7 @@ export interface MenuItem {
   description?: string;
   modifierGroups?: ModifierGroup[];
   recipe?: RecipeIngredient[];
+  outletId?: string;
 }
 
 export interface RawMaterial {
@@ -41,6 +42,7 @@ export interface RawMaterial {
   minStock: number; // ROP threshold
   costPerUnit: number;
   storageZone: 'Dry Storage' | 'Walk-in Chiller' | 'Deep Freezer' | 'Bar Station';
+  outletId?: string;
 }
 
 export type CookingStatus = 'queue' | 'cooking' | 'ready' | 'handed_off';
@@ -72,12 +74,17 @@ export interface OrderItem {
   cookingStatus?: CookingStatus; // KDS live status ('queue' | 'cooking' | 'ready' | 'handed_off')
   handedOffAt?: string; // timestamp when passed from KDS to waiter
   servedAt?: string;
+  createdByStaffId?: string;
+  createdByStaffName?: string;
+  createdAt?: string;
 }
 
 export interface OrderBatch {
   batchNumber: number;
   timestamp: string;
   items: OrderItem[];
+  createdByStaffId?: string;
+  createdByStaffName?: string;
 }
 
 export interface Table {
@@ -90,6 +97,12 @@ export interface Table {
   guestCount?: number;
   openedAt?: string;
   waiterName?: string;
+  outletId?: string;
+  sessionVersion?: number;
+  reservedByStaffId?: string;
+  reservedAt?: string;
+  reservationNote?: string;
+  nextBatchNumber?: number;
 }
 
 export interface Transaction {
@@ -118,6 +131,11 @@ export interface Transaction {
   cashGiven?: number;
   changeAmount?: number;
   cashierName?: string;
+  outletId?: string;
+  sessionVersion?: number;
+  openedByStaffId?: string;
+  openedByStaffName?: string;
+  nextBatchNumber?: number;
 }
 
 export interface PrintTicket {
@@ -145,6 +163,7 @@ export interface PrintTicket {
 }
 
 export type UserRole = 'owner' | 'cashier' | 'finance';
+export type AccountStatus = 'active' | 'inactive' | 'blocked';
 
 export interface StaffAccount {
   id: string;
@@ -154,7 +173,24 @@ export interface StaffAccount {
   nfcTagUid: string;
   avatarColor: string;
   roleLabel: string;
+  status?: AccountStatus;
+  isActive?: boolean;
+  outletId?: string;
+  outletName?: string;
+  tenantId?: string;
+  memberships?: OutletMembership[];
+  blockedReason?: string;
 }
+
+
+export interface OutletMembership { outletId: string; outletName: string; role: UserRole; status: AccountStatus; }
+export interface AuthSession { staff: StaffAccount; tenantId: string; outletId: string; outletName: string; role: UserRole; loggedInAt: string; }
+export type AuditOutcome = 'allow' | 'deny';
+export interface AuditEvent { id: string; at: string; action: string; outcome: AuditOutcome; staffId?: string; staffName?: string; outletId?: string; tableId?: string; message: string; meta?: Record<string, unknown>; }
+export type TableAccessResult =
+ | { ok: true; action: 'create_session'; table: Table }
+ | { ok: true; action: 'join_session'; table: Table; transactionId: string; sessionVersion: number }
+ | { ok: false; reason: 'unauthenticated' | 'inactive' | 'blocked' | 'unauthorized_outlet' | 'reservation_denied' | 'invalid_state'; message: string };
 
 export interface PettyCashEntry {
   id: string;
