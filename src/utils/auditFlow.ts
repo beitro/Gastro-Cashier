@@ -3,6 +3,7 @@ import { StaffAccount, Table, Transaction, OrderItem, OrderBatch, UserRole } fro
 declare module '../types/pos' {
   interface StaffAccount {
     status?: 'active' | 'inactive' | 'blocked';
+    isActive?: boolean;
     outletId?: string;
     outletName?: string;
     tenantId?: string;
