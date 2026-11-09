@@ -6,12 +6,11 @@ on:
       - 'scripts/db-*.mjs'
       - 'package.json'
       - '.github/workflows/database-safety.yml'
-  push:
-    branches: [feat/postgres-consolidated]
   workflow_dispatch:
 jobs:
   migration-and-rls:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     services:
       postgres:
         image: postgres:15
@@ -41,6 +40,7 @@ jobs:
           CONFIRM_EMPTY_DATABASE_MIGRATION: YES
         run: npm run db:migrate
       - name: Verify tenant isolation, outlet scope, idempotency and concurrency
+        timeout-minutes: 3
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
         run: node scripts/db-integration-safety.mjs
