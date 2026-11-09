@@ -4,6 +4,8 @@ This repository has a PostgreSQL 15 baseline in `schema.sql`. The current React 
 
 ## 1. Inspect the Neon database first
 
+<!-- Trigger a fresh CI run after repository variables/secrets are configured. -->
+
 In Neon Console, select the intended project, branch, database, and role. Copy the **pooled** connection string. Do not share it in chat, commit it, or put it in a `VITE_*` variable.
 
 Set `DATABASE_URL` in the server's secret/environment configuration. For local development, put it in an ignored `.env` file (never commit it).
