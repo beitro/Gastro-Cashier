@@ -1,3 +1,4 @@
+// [harden-neon-view] guarded one-time Neon view security patch.
 import pg from 'pg';
 
 const { Client } = pg;
