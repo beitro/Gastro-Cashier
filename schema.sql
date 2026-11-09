@@ -251,14 +251,14 @@ FROM dining_tables t LEFT JOIN dining_sessions s
 DO $$
 DECLARE tbl TEXT;
 BEGIN
- FOREACH tbl IN ARRAY ARRAY['outlets','outlet_memberships','outlet_settings','dining_tables','reservations','dining_sessions',
+ FOREACH tbl IN ARRAY ARRAY['outlet_memberships','outlet_settings','dining_tables','reservations','dining_sessions',
  'menu_items','recipes','inventory_items','order_batches','payments','order_items','order_item_modifiers',
  'payment_allocations','inventory_movements','audit_logs','outbox_events','idempotency_keys']
  LOOP
   EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',tbl);
   EXECUTE format('CREATE POLICY tenant_outlet_isolation ON %I USING (tenant_id=nullif(current_setting(''app.tenant_id'',true),'''')::uuid AND (outlet_id IS NULL OR outlet_id=nullif(current_setting(''app.outlet_id'',true),'''')::uuid)) WITH CHECK (tenant_id=nullif(current_setting(''app.tenant_id'',true),'''')::uuid AND (outlet_id IS NULL OR outlet_id=nullif(current_setting(''app.outlet_id'',true),'''')::uuid))',tbl);
  END LOOP;
- FOREACH tbl IN ARRAY ARRAY['tenant_memberships','tenant_settings','menu_categories','modifier_groups','modifier_options','recipe_lines']
+ FOREACH tbl IN ARRAY ARRAY['outlets','tenant_memberships','tenant_settings','menu_categories','modifier_groups','modifier_options','recipe_lines']
  LOOP
   EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',tbl);
   EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (tenant_id=nullif(current_setting(''app.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id=nullif(current_setting(''app.tenant_id'',true),'''')::uuid)',tbl);
