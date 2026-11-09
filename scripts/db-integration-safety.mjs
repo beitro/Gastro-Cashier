@@ -87,7 +87,8 @@ try {
   await runtime.query('ROLLBACK');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletOtherA]);
-  if ((await runtime.query('SELECT id FROM dining_tables')).rowCount !== 0) throw new Error('Wrong outlet context exposed rows');
+  const outletScopedRows=await runtime.query('SELECT id FROM dining_tables');
+  if (outletScopedRows.rowCount !== 1 || outletScopedRows.rows[0].id !== ids.tableOtherA) throw new Error('Wrong outlet context exposed rows outside its own outlet');
   await runtime.query('ROLLBACK');
 
   phase('verify the provisioned gastro_runtime role with production grants');
