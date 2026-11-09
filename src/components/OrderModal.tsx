@@ -43,6 +43,7 @@ import { sounds } from '../utils/soundEffects';
 interface OrderModalProps {
   table: Table;
   existingTransaction?: Transaction;
+  menuStock: Record<string, number>;
   paymentFlowMode: PaymentFlowMode;
   onChangePaymentFlowMode: (mode: PaymentFlowMode) => void;
   onClose: () => void;
@@ -70,6 +71,7 @@ interface OrderModalProps {
 export const OrderModal: React.FC<OrderModalProps> = ({
   table,
   existingTransaction,
+  menuStock,
   paymentFlowMode,
   onChangePaymentFlowMode,
   onClose,
@@ -118,6 +120,13 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   // Fast 1-Tap Add to Cart
   const handleQuickAdd = (menuItem: MenuItem) => {
     sounds.playTapSound();
+
+    const currentStock = menuStock[menuItem.id] ?? 0;
+    const alreadyInCart = cartItems.filter((item) => item.menuItemId === menuItem.id).reduce((sum, item) => sum + item.quantity, 0);
+    if (alreadyInCart >= currentStock) {
+      window.alert(currentStock <= 0 ? 'Menu sedang habis.' : `Stok tersisa hanya ${currentStock}.`);
+      return;
+    }
 
     const existingIndex = cartItems.findIndex(
       (c) => c.menuItemId === menuItem.id && c.selectedModifiers.length === 0 && !c.notes
@@ -779,6 +788,8 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                 const inCartQty = cartItems
                   .filter((c) => c.menuItemId === item.id)
                   .reduce((sum, c) => sum + c.quantity, 0);
+                const availableStock = menuStock[item.id] ?? 0;
+                const isOutOfStock = availableStock <= 0 || inCartQty >= availableStock;
 
                 return (
                   <article
@@ -788,7 +799,8 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleQuickAdd(item)}
-                      className="text-left w-full flex-1 flex flex-col justify-between cursor-pointer focus:outline-none"
+                      disabled={isOutOfStock}
+                      className={`text-left w-full flex-1 flex flex-col justify-between focus:outline-none ${isOutOfStock ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'}`}
                     >
                       {/* Top Destination Eyebrow, Active Qty & Stock */}
                       <div className="flex items-center justify-between gap-2 mb-1.5 w-full">
@@ -807,7 +819,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                             </span>
                           )}
                           <span className="text-xs text-slate-500 font-mono tabular-nums font-bold">
-                            Stok {item.stock}
+                            Stok {availableStock}
                           </span>
                         </div>
                       </div>
