@@ -196,6 +196,35 @@ app.post('/api/sessions/:sessionId/orders', authenticate, asyncRoute(async (req,
   });
   res.status(result.status).json(result.body);
 }));
+
+app.post('/api/sessions/:sessionId/payments', authenticate, asyncRoute(async (req,res) => {
+  const { method, discountAmount=0, cashReceived, idempotencyKey, cardBank } = req.body || {};
+  if (!['cash','qris','card','transfer','other'].includes(method) || typeof idempotencyKey!=='string' || idempotencyKey.length<8 || idempotencyKey.length>128 || !Number.isFinite(Number(discountAmount)) || Number(discountAmount)<0) return res.status(400).json({error:'Metode, idempotencyKey (8–128 karakter), atau diskon tidak valid.'});
+  const result=await scoped(req,async c=>{
+    const existing=await c.query('SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND idempotency_key=$3',[req.auth.tenant_id,req.auth.outlet_id,idempotencyKey]);
+    if(existing.rowCount) return {status:200,body:existing.rows[0]};
+    const session=await c.query("SELECT * FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing') FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    if(!session.rowCount) return {status:404,body:{error:'Sesi meja tidak ditemukan atau sudah ditutup.'}};
+    const items=await c.query("SELECT id,line_total FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND cooking_status<>'cancelled' ORDER BY created_at FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    if(!items.rowCount) return {status:400,body:{error:'Tidak ada item pesanan yang dapat dibayar.'}};
+    const subtotal=items.rows.reduce((sum,x)=>sum+Number(x.line_total),0), discount=Number(discountAmount);
+    if(discount>subtotal) return {status:400,body:{error:'Diskon melebihi subtotal.'}};
+    const service=Number((subtotal-discount)*Number(session.rows[0].service_charge_rate));
+    const tax=Number(((subtotal-discount)+service)*Number(session.rows[0].tax_rate));
+    const total=Number((subtotal-discount+service+tax).toFixed(2));
+    const received=method==='cash'?Number(cashReceived):total;
+    if(!Number.isFinite(received)||received<total) return {status:400,body:{error:'Uang diterima tidak cukup.'}};
+    const receipt='R-'+new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,14)+'-'+randomBytes(3).toString('hex').toUpperCase();
+    const payment=(await c.query(`INSERT INTO payments(tenant_id,outlet_id,session_id,receipt_number,method,card_bank,subtotal_amount,discount_amount,service_charge_amount,tax_amount,total_amount,cash_received,change_amount,cashier_staff_id,idempotency_key)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,receipt,method,cardBank||null,subtotal,discount,service,tax,total,received,received-total,req.auth.staff_id,idempotencyKey])).rows[0];
+    for(const item of items.rows) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5)',[req.auth.tenant_id,req.auth.outlet_id,payment.id,item.id,Number(item.line_total)]);
+    await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    return {status:201,body:payment};
+  });
+  res.status(result.status).json(result.body);
+}));
+
 app.patch('/api/order-items/:itemId/kitchen-status', authenticate, asyncRoute(async (req,res) => {
   const allowed=['queue','cooking','ready','handed_off','cancelled'];
   const status=req.body?.status;
