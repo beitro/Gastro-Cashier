@@ -439,7 +439,7 @@ export default function App() {
   const [settledTransactions, setSettledTransactions] = useState<Transaction[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_SETTLED);
-      if (saved) return JSON.parse(saved);
+      if (saved) return migrateTables(JSON.parse(saved));
     } catch {}
     return [];
   });
@@ -447,7 +447,7 @@ export default function App() {
   const [allPrintTickets, setAllPrintTickets] = useState<PrintTicket[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TICKETS);
-      if (saved) return JSON.parse(saved);
+      if (saved) return migrateTransactions(JSON.parse(saved));
     } catch {}
     return [];
   });
@@ -1113,7 +1113,7 @@ export default function App() {
   }) => {
     const { transactionId, tableId, paymentMethod, cashGiven, changeAmount, discountAmount } = params;
     const currentTx = activeTransactions[transactionId];
-    if (!currentTx) return;
+    if (!currentTx || !canOperatePOS(currentStaff)) return;
 
     const now = new Date().toISOString();
     const unpaidItems = currentTx.allCurrentItems.filter((i) => !i.isPaid);
@@ -1366,6 +1366,7 @@ export default function App() {
           onSubmitOrder={handleSubmitOrder}
           onSubmitPaymentFirstOrder={handleSubmitPaymentFirstOrder}
           menuStock={menuStock}
+          staffName={currentStaff?.name}
         />
       )}
 
