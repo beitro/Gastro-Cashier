@@ -77,7 +77,6 @@ try {
   await a.query('ROLLBACK');
 
   // Verify the partial unique index serializes concurrent open sessions per table.
-  await a.connect();
   await b.connect();
   await a.query('BEGIN');
   await a.query(
