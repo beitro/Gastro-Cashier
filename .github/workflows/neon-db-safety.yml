@@ -1,0 +1,60 @@
+name: Neon PostgreSQL migration safety
+
+on:
+  pull_request:
+    paths:
+      - 'schema.sql'
+      - 'scripts/db-*.mjs'
+      - 'server/**'
+      - 'package.json'
+      - '.github/workflows/neon-db-safety.yml'
+  push:
+    branches:
+      - feat/neon-postgres-safe-foundation
+  workflow_dispatch:
+
+jobs:
+  migration-safety:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gastro_empty_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gastro_empty_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-package-lock
+      - name: Inspect empty test database (read-only)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_empty_test
+        run: npm run db:check
+      - name: Apply schema only after explicit empty-database confirmation
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_empty_test
+          CONFIRM_EMPTY_DATABASE_MIGRATION: YES
+        run: npm run db:migrate
+      - name: Verify migrated schema
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_empty_test
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+          await client.connect();
+          const result = await client.query("SELECT to_regclass('public.tenants') AS tenants, to_regclass('public.v_table_board') AS board");
+          if (!result.rows[0].tenants || !result.rows[0].board) throw new Error('Required schema objects are missing');
+          await client.end();
+          NODE
