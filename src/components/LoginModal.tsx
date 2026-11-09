@@ -1,10 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StaffAccount } from '../types/pos';
-import {
-  authenticateByPin,
-  authenticateByNfc,
-  DEFAULT_STAFF_ACCOUNTS,
-} from '../utils/authRoles';
+import { DEFAULT_STAFF_ACCOUNTS } from '../utils/authRoles';
 import { sounds } from '../utils/soundEffects';
 import {
   KeyRound,
@@ -120,51 +116,33 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setErrorMessage(null);
   };
 
-  const verifyEnteredPin = (inputPin: string) => {
-    if (isPinLocked) {
-      setErrorMessage('Terlalu banyak percobaan. Coba lagi dalam ' + lockRemainingSec + 's.');
-      setPin('');
-      return;
-    }
-    const result = authenticateByPin(inputPin);
-    if (result.success && result.staff) {
-      sounds.playBellSound();
-      setFailedAttempts(0);
-      setLockUntil(null);
-      setNfcSuccessAnimation(`Selamat datang, ${result.staff.name}!`);
-      setTimeout(() => {
-        onLoginSuccess(result.staff!);
-      }, 400);
-    } else {
-      sounds.playTapSound();
-      const nextFails = failedAttempts + 1;
-      setFailedAttempts(nextFails);
-      if (nextFails >= MAX_PIN_ATTEMPTS) {
-        setLockUntil(Date.now() + LOCK_DURATION_MS);
-        setErrorMessage('PIN salah ' + MAX_PIN_ATTEMPTS + 'x. Input dikunci ' + (LOCK_DURATION_MS / 1000) + ' detik.');
-      } else {
-        setErrorMessage((result.error || 'PIN tidak valid') + ' · Sisa percobaan: ' + (MAX_PIN_ATTEMPTS - nextFails));
-      }
-      setTimeout(() => {
-        setPin('');
-      }, 600);
+  const verifyEnteredPin = async (inputPin: string) => {
+    if (isPinLocked) { setErrorMessage('Input PIN sedang dikunci.'); setPin(''); return; }
+    try {
+      const response = await fetch('/api/auth/pin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:inputPin}) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Autentikasi gagal.');
+      localStorage.setItem('gastro_cashier_api_token', data.token);
+      sounds.playBellSound(); setFailedAttempts(0); setLockUntil(null);
+      setNfcSuccessAnimation('Selamat datang, ' + data.staff.name + '!');
+      setTimeout(() => onLoginSuccess(data.staff), 400);
+    } catch (error) {
+      sounds.playTapSound(); const n=failedAttempts+1; setFailedAttempts(n);
+      if(n>=MAX_PIN_ATTEMPTS){setLockUntil(Date.now()+LOCK_DURATION_MS);setErrorMessage('Terlalu banyak percobaan. Input dikunci 30 detik.');}
+      else setErrorMessage((error instanceof Error?error.message:'PIN tidak valid')+' · Sisa percobaan: '+(MAX_PIN_ATTEMPTS-n));
+      setTimeout(()=>setPin(''),600);
     }
   };
-
-  const handleNfcAuth = (tagUid: string) => {
-    const result = authenticateByNfc(tagUid);
-    if (result.success && result.staff) {
-      sounds.playBellSound();
-      setFailedAttempts(0);
-      setLockUntil(null);
-      setNfcSuccessAnimation(`NFC Terdeteksi: ${result.staff.name} (${result.staff.roleLabel})`);
-      setTimeout(() => {
-        onLoginSuccess(result.staff!);
-      }, 500);
-    } else {
-      sounds.playTapSound();
-      setErrorMessage(result.error || 'Kartu NFC tidak terdaftar');
-    }
+  const handleNfcAuth = async (tagUid: string) => {
+    try {
+      const response=await fetch('/api/auth/nfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:tagUid})});
+      const data=await response.json();
+      if(!response.ok) throw new Error(data.error||'Kartu NFC tidak dikenali.');
+      localStorage.setItem('gastro_cashier_api_token',data.token);
+      sounds.playBellSound();setFailedAttempts(0);setLockUntil(null);
+      setNfcSuccessAnimation('NFC terverifikasi: '+data.staff.name);
+      setTimeout(()=>onLoginSuccess(data.staff),500);
+    } catch(error){sounds.playTapSound();setErrorMessage(error instanceof Error?error.message:'Autentikasi NFC gagal.');}
   };
 
   const handleQuickDemoStaff = (staff: StaffAccount) => {
