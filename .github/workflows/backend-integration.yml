@@ -1,0 +1,29 @@
+name: Backend integration checks
+on:
+  push:
+    branches: [feat/postgres15-backend-integration]
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'src/components/LoginModal.tsx'
+      - 'package.json'
+      - 'vite.config.ts'
+      - 'db/migrations/**'
+      - '.github/workflows/backend-integration.yml'
+  workflow_dispatch:
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: Check API server syntax
+        run: node --check server/index.mjs
+      - name: TypeScript checks
+        run: bun run lint
+      - name: Production build
+        run: bun run build
