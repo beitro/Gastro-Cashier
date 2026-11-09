@@ -94,6 +94,7 @@ CREATE TABLE dining_sessions (
  UNIQUE(tenant_id,outlet_id,id), UNIQUE(tenant_id,outlet_id,session_number),
  CHECK((status IN ('active','billing') AND closed_at IS NULL) OR (status IN ('closed','cancelled') AND closed_at IS NOT NULL))
 );
+CREATE UNIQUE INDEX uq_reservation_one_session ON dining_sessions(tenant_id,outlet_id,reservation_id) WHERE reservation_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_one_open_session_per_table ON dining_sessions(tenant_id,outlet_id,table_id) WHERE status IN ('active','billing');
 CREATE INDEX idx_sessions_open ON dining_sessions(tenant_id,outlet_id,opened_at DESC) WHERE status IN ('active','billing');
 
