@@ -973,7 +973,7 @@ export default function App() {
   };
 
   const handleApproveCancellation = (requestId: string) => {
-    if (currentStaff?.role !== 'owner') {
+    if (!canApproveCancellation(currentStaff)) {
       window.alert('Hanya Outlet Manager (role Owner pada demo) yang dapat menyetujui pengembalian stok.');
       return;
     }
