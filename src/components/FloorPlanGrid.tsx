@@ -191,7 +191,7 @@ export const FloorPlanGrid: React.FC<FloorPlanGridProps> = ({
               type="button"
               onClick={() => handleTableClick(table)}
               className={`min-h-[154px] sm:min-h-[168px] p-4 sm:p-4.5 flex flex-col justify-between text-left cursor-pointer select-none ${
-                isOccupied ? 'clay-table-occupied' : isReserved ? 'clay-table-reserved' : 'clay-table-available'
+                isOccupied ? 'clay-table-occupied' : isReserved ? 'clay-table-occupied ring-2 ring-amber-300' : 'clay-table-available'
               }`}
             >
               {/* Top Row: Large Table Number & Status Indicator */}
