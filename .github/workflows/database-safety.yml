@@ -1,0 +1,46 @@
+name: PostgreSQL database safety
+on:
+  pull_request:
+    paths:
+      - 'schema.sql'
+      - 'scripts/db-*.mjs'
+      - 'package.json'
+      - '.github/workflows/database-safety.yml'
+  push:
+    branches: [feat/postgres-consolidated]
+  workflow_dispatch:
+jobs:
+  migration-and-rls:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gastro_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gastro_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-package-lock
+      - name: Read-only inspect ephemeral database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: npm run db:check
+      - name: Apply guarded baseline
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+          CONFIRM_EMPTY_DATABASE_MIGRATION: YES
+        run: npm run db:migrate
+      - name: Verify tenant isolation, outlet scope, idempotency and concurrency
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: node scripts/db-integration-safety.mjs
