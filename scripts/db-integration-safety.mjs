@@ -5,9 +5,11 @@ const { Client } = pg;
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
 
-const admin = new Client({ connectionString });
-const a = new Client({ connectionString });
-const b = new Client({ connectionString });
+const clientOptions = { connectionString, connectionTimeoutMillis: 10_000, statement_timeout: 15_000, query_timeout: 20_000 };
+const admin = new Client(clientOptions);
+const a = new Client(clientOptions);
+const b = new Client(clientOptions);
+const phase = (name) => console.log(`[db-safety] ${name}`);
 const ids = {
   tenantA: randomUUID(), tenantB: randomUUID(),
   outletA: randomUUID(), outletB: randomUUID(),
@@ -17,7 +19,9 @@ const ids = {
 const slug = randomUUID().replaceAll('-', '').slice(0, 16);
 
 try {
+  phase('connect and provision test role');
   await admin.connect();
+  await admin.query("SET lock_timeout = '8s'; SET idle_in_transaction_session_timeout = '30s'");
   await admin.query(`
     DO $$
     BEGIN
@@ -31,6 +35,7 @@ try {
     GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gastro_runtime_test;
   `);
 
+  phase('seed isolated tenant fixtures');
   await admin.query('BEGIN');
   await admin.query(
     'INSERT INTO tenants (id, slug, name) VALUES ($1,$2,$3),($4,$5,$6)',
@@ -46,7 +51,9 @@ try {
   );
   await admin.query('COMMIT');
 
+  phase('verify tenant and outlet RLS');
   await a.connect();
+  await a.query("SET lock_timeout = '8s'; SET idle_in_transaction_session_timeout = '30s'");
   await a.query('BEGIN');
   await a.query('SET LOCAL ROLE gastro_runtime_test');
   await a.query("SELECT set_config('app.tenant_id',$1,true), set_config('app.outlet_id',$2,true)", [ids.tenantA, ids.outletA]);
@@ -80,8 +87,10 @@ try {
   if (wrongOutlet.rowCount !== 0) throw new Error('RLS allowed access from the wrong outlet context');
   await a.query('ROLLBACK');
 
+  phase('verify concurrent open-session uniqueness');
   // Verify the partial unique index serializes concurrent open sessions per table.
   await b.connect();
+  await b.query("SET lock_timeout = '8s'; SET idle_in_transaction_session_timeout = '30s'");
   await a.query('BEGIN');
   await a.query(
     "INSERT INTO dining_sessions (id,tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES ($1,$2,$3,$4,$5,2,'active')",
@@ -104,6 +113,7 @@ try {
   }
   if (!concurrentDuplicateRejected) throw new Error('Concurrent duplicate open session was not rejected');
 
+  phase('verify idempotency-key uniqueness');
   // Idempotency keys must be unique inside a tenant/outlet scope.
   await admin.query(
     'INSERT INTO idempotency_keys (tenant_id,outlet_id,key,operation) VALUES ($1,$2,$3,$4)',
@@ -120,6 +130,7 @@ try {
   }
   if (!duplicateIdempotencyRejected) throw new Error('Duplicate idempotency key was accepted');
 
+  phase('all database safety assertions passed');
   console.log(JSON.stringify({
     tests: 'passed',
     rls: { tenantReadIsolation: true, crossTenantWriteDenied, wrongOutletDenied: true },
