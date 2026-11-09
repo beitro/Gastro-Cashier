@@ -105,6 +105,7 @@ try {
   console.log(JSON.stringify({tests:'passed',rls:{allTablesForceRls:true,noContextDenied:true,explicitAuthLookup:true,tokenScopedSessions:true,tenantIsolation:true,outletIsolation:true,crossTenantWriteDenied:true,crossOutletWriteDenied:true,viewSecurityInvoker:true,staffScope:true}, concurrency:{oneOpenSessionPerTable:duplicateSessionDenied}, idempotency:{duplicateKeyRejected:duplicateKeyDenied}},null,2));
 } finally {
   await runtime.query('ROLLBACK').catch(()=>{});
+  await admin.query('ROLLBACK').catch(()=>{});
   await admin.query('DELETE FROM idempotency_keys WHERE tenant_id=$1 AND outlet_id=$2',[ids.tenantA,ids.outletA]).catch(()=>{});
   await admin.query('DELETE FROM dining_sessions WHERE id=ANY($1::uuid[])',[[ids.diningSessionA,ids.diningSessionB]]).catch(()=>{});
   await admin.query('DELETE FROM staff_sessions WHERE id=$1',[ids.staffSessionA]).catch(()=>{});
