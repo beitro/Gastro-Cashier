@@ -120,11 +120,11 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
     {
       id: 'inventory',
-      label: 'BOM Stok',
+      label: 'Stok Menu',
       icon: <Boxes className="w-4 h-4 stroke-[2]" />,
       badge: lowStockAlertCount > 0 ? lowStockAlertCount : undefined,
       alert: lowStockAlertCount > 0,
-      roles: ['owner', 'finance'],
+      roles: ['owner', 'finance', 'cashier'],
     },
     {
       id: 'printer',
