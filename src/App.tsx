@@ -729,7 +729,7 @@ export default function App() {
     const now = new Date().toISOString();
     if (!currentStaff || !canOperatePOS(currentStaff)) { window.alert('Role Anda tidak diizinkan mengoperasikan POS.'); return; }
     if (!reserveMenuStock(params.newItems)) return;
-    const paidNewItems = params.newItems.map((item) => ({ ...item, isPaid: true }));
+    const paidNewItems = params.newItems.map((item) => ({ ...item, isPaid: true, createdByStaffId: currentStaff.id, createdByStaffName: currentStaff.name, createdAt: now }));
 
     const existingTxId = table.currentTransactionId;
     const existingTx = existingTxId ? activeTransactions[existingTxId] : null;
@@ -772,7 +772,11 @@ export default function App() {
       paymentMethod,
       cashGiven,
       changeAmount,
-      cashierName: currentStaff?.name || 'Staff',
+      cashierName: currentStaff.name,
+      outletId: table.outletId || currentStaff.outletId,
+      openedByStaffId: existingTx?.openedByStaffId || currentStaff.id,
+      openedByStaffName: existingTx?.openedByStaffName || currentStaff.name,
+      sessionVersion: (existingTx?.sessionVersion || 0) + 1,
     };
 
     // 1. Record Omzet & PB1 immediately
