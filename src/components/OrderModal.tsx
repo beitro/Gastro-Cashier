@@ -39,11 +39,13 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { sounds } from '../utils/soundEffects';
+import { nextBatchNumber } from '../utils/auditFlow';
 
 interface OrderModalProps {
   table: Table;
   existingTransaction?: Transaction;
   menuStock: Record<string, number>;
+  staffName?: string;
   paymentFlowMode: PaymentFlowMode;
   onChangePaymentFlowMode: (mode: PaymentFlowMode) => void;
   onClose: () => void;
@@ -72,6 +74,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   table,
   existingTransaction,
   menuStock,
+  staffName,
   paymentFlowMode,
   onChangePaymentFlowMode,
   onClose,
@@ -79,13 +82,13 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   onSubmitPaymentFirstOrder,
 }) => {
   const isAddOrder = !!existingTransaction && existingTransaction.status === 'active';
-  const batchNumber = isAddOrder ? existingTransaction.batches.length + 1 : 1;
+  const batchNumber = isAddOrder ? nextBatchNumber(existingTransaction) : 1;
 
   const [guestCount, setGuestCount] = useState<number>(
     existingTransaction?.guestCount || Math.min(table.capacity, 2)
   );
   const [waiterName, setWaiterName] = useState<string>(
-    existingTransaction?.waiterName || 'Budi Prasetyo'
+    existingTransaction?.waiterName || staffName || 'Staff'
   );
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'makanan' | 'minuman' | 'snack' | 'dessert'>('all');
   const [searchQuery, setSearchQuery] = useState('');

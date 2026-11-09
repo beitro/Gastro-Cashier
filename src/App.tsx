@@ -21,7 +21,7 @@ import {
   countWaiterPickupItems,
   isItemWaitingForWaiter,
 } from './utils/posCalculations';
-import { DEFAULT_STAFF_ACCOUNTS } from './utils/authRoles';
+import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
 
 import { Navbar, NavTabId } from './components/Navbar';
@@ -422,7 +422,7 @@ export default function App() {
   const [tables, setTables] = useState<Table[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TABLES);
-      if (saved) return JSON.parse(saved);
+      if (saved) return migrateTables(JSON.parse(saved));
     } catch {}
     return INITIAL_TABLES;
   });
@@ -430,7 +430,7 @@ export default function App() {
   const [activeTransactions, setActiveTransactions] = useState<Record<string, Transaction>>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
-      if (saved) return JSON.parse(saved);
+      if (saved) return migrateTransactions(JSON.parse(saved));
     } catch {}
     return INITIAL_TRANSACTIONS;
   });
@@ -509,9 +509,9 @@ export default function App() {
   const [currentStaff, setCurrentStaff] = useState<StaffAccount | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_STAFF);
-      if (saved) return JSON.parse(saved);
+      if (saved) return authenticateStaff(JSON.parse(saved));
     } catch {}
-    return DEFAULT_STAFF_ACCOUNTS[1]; // Budi Prasetyo (Kasir Utama)
+    return null;
   });
 
   const [isLocked, setIsLocked] = useState<boolean>(false);
@@ -565,7 +565,9 @@ export default function App() {
     setShowSheetsModal(true);
   };
 
-  const handleLoginSuccess = (staff: StaffAccount) => {
+  const handleLoginSuccess = (rawStaff: StaffAccount) => {
+    const staff = authenticateStaff(rawStaff);
+    if (!staff) { window.alert('Akun tidak aktif atau tidak memiliki membership outlet aktif.'); return; }
     setCurrentStaff(staff);
     setIsLocked(false);
     try {
@@ -659,116 +661,44 @@ export default function App() {
 
   // FLOW 1 (EXISTING): PAYMENT LAST (BAYAR BELAKANG) — OPEN TABLE & SEND TO KITCHEN/BAR
   const handleSubmitOrder = (params: {
-    table: Table;
-    guestCount: number;
-    waiterName: string;
-    newItems: OrderItem[];
-    batchNumber: number;
+    table: Table; guestCount: number; waiterName: string; newItems: OrderItem[]; batchNumber: number;
   }) => {
-    const { table, guestCount, waiterName, batchNumber } = params;
+    const { table, guestCount, waiterName } = params;
+    if (!currentStaff || !canOperatePOS(currentStaff)) { window.alert('Role Anda tidak diizinkan mengoperasikan POS.'); return; }
     if (!reserveMenuStock(params.newItems)) return;
-    const newItems = params.newItems.map((item) => ({ ...item, isPaid: false }));
     const now = new Date().toISOString();
-
+    const baseTx = table.currentTransactionId ? activeTransactions[table.currentTransactionId] : undefined;
     let transaction: Transaction;
-    const existingTxId = table.currentTransactionId;
-    const existingTx = existingTxId ? activeTransactions[existingTxId] : null;
+    let stampedNewItems: OrderItem[];
+    let batchNumber: number;
 
-    if (existingTx) {
-      const updatedBatches: OrderBatch[] = [
-        ...existingTx.batches,
-        {
-          batchNumber,
-          timestamp: now,
-          items: newItems,
-        },
-      ];
-      const mergedItems = [...existingTx.allCurrentItems, ...newItems];
-      const totals = calculateOrderTotals(mergedItems, existingTx.discountAmount);
-
-      transaction = {
-        ...existingTx,
-        paymentFlow: 'payment_last',
-        isPaid: false,
-        batches: updatedBatches,
-        allCurrentItems: mergedItems,
-        subtotal: totals.subtotal,
-        serviceChargeAmount: totals.serviceChargeAmount,
-        taxAmount: totals.taxAmount,
-        totalAmount: totals.totalAmount,
-      };
+    if (baseTx) {
+      const appended = appendBatch(baseTx, params.newItems.map(i => ({ ...i, isPaid: false })), currentStaff);
+      transaction = appended;
+      batchNumber = appended.nextBatchNumber! - 1;
+      stampedNewItems = appended.batches[appended.batches.length - 1].items;
+      const totals = calculateOrderTotals(appended.allCurrentItems, appended.discountAmount);
+      transaction = { ...appended, paymentFlow: 'payment_last', isPaid: false, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount };
     } else {
-      const newTxId = `TRX-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
-      const totals = calculateOrderTotals(newItems);
-
-      transaction = {
-        id: newTxId,
-        tableId: table.id,
-        tableNumber: table.tableNumber,
-        area: table.area,
-        guestCount,
-        waiterName,
-        openedAt: now,
-        status: 'active',
-        paymentFlow: 'payment_last',
-        isPaid: false,
-        batches: [
-          {
-            batchNumber: 1,
-            timestamp: now,
-            items: newItems,
-          },
-        ],
-        allCurrentItems: newItems,
-        subtotal: totals.subtotal,
-        serviceChargeRate: 0.05,
-        serviceChargeAmount: totals.serviceChargeAmount,
-        taxRate: 0.1,
-        taxAmount: totals.taxAmount,
-        discountAmount: 0,
-        totalAmount: totals.totalAmount,
-      };
+      const created = createSession(table, currentStaff, guestCount, activeTransactions);
+      if (!created.ok) { window.alert(created.message); return; }
+      const appended = appendBatch(created.transaction, params.newItems.map(i => ({ ...i, isPaid: false })), currentStaff);
+      transaction = { ...appended, waiterName, outletId: table.outletId || currentStaff.outletId };
+      batchNumber = appended.nextBatchNumber! - 1;
+      stampedNewItems = appended.batches[appended.batches.length - 1].items;
+      const totals = calculateOrderTotals(appended.allCurrentItems);
+      transaction = { ...transaction, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount };
     }
 
-    const newTickets = generatePrintTickets({
-      transaction,
-      batchItems: newItems,
-      batchNumber,
-      type: 'order',
-    });
-
-    setTables((prev) =>
-      prev.map((t) =>
-        t.id === table.id
-          ? {
-              ...t,
-              status: 'occupied',
-              currentTransactionId: transaction.id,
-              guestCount,
-              waiterName,
-              openedAt: t.openedAt || now,
-            }
-          : t
-      )
-    );
-
-    setActiveTransactions((prev) => ({
-      ...prev,
-      [transaction.id]: transaction,
-    }));
-
-    setAllPrintTickets((prev) => [...newTickets, ...prev]);
-
-    setRawMaterials((prevMaterials) => deductRecipeMaterials(newItems, prevMaterials, MENU_ITEMS).updatedMaterials);
-
+    const newTickets = generatePrintTickets({ transaction, batchItems: stampedNewItems, batchNumber, type: 'order' });
+    setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: 'occupied', currentTransactionId: transaction.id, guestCount, waiterName, openedAt: t.openedAt || now, outletId: transaction.outletId, sessionVersion: transaction.sessionVersion } : t));
+    setActiveTransactions(prev => ({ ...prev, [transaction.id]: transaction }));
+    setAllPrintTickets(prev => [...newTickets, ...prev]);
+    setRawMaterials(prev => deductRecipeMaterials(stampedNewItems, prev, MENU_ITEMS).updatedMaterials);
     setOrderModalTable(null);
     setPrinterModalTickets(newTickets);
     setShowPrinterModal(true);
-
-    if (soundEnabled) {
-      sounds.playPrinterSound();
-      setTimeout(() => sounds.playBellSound(), 350);
-    }
+    if (soundEnabled) { sounds.playPrinterSound(); setTimeout(() => sounds.playBellSound(), 350); }
   };
 
   // FLOW 2 (NEW): PAYMENT FIRST (LANGSUNG BAYAR DI DEPAN) — SETTLE IMMEDIATELY + PRINT RECEIPT & KITCHEN/BAR/CHECKER
@@ -796,8 +726,9 @@ export default function App() {
       keepTableAvailable = false,
     } = params;
     const now = new Date().toISOString();
+    if (!currentStaff || !canOperatePOS(currentStaff)) { window.alert('Role Anda tidak diizinkan mengoperasikan POS.'); return; }
     if (!reserveMenuStock(params.newItems)) return;
-    const paidNewItems = params.newItems.map((item) => ({ ...item, isPaid: true }));
+    const paidNewItems = params.newItems.map((item) => ({ ...item, isPaid: true, createdByStaffId: currentStaff.id, createdByStaffName: currentStaff.name, createdAt: now }));
 
     const existingTxId = table.currentTransactionId;
     const existingTx = existingTxId ? activeTransactions[existingTxId] : null;
@@ -840,7 +771,11 @@ export default function App() {
       paymentMethod,
       cashGiven,
       changeAmount,
-      cashierName: 'Budi Prasetyo',
+      cashierName: currentStaff.name,
+      outletId: table.outletId || currentStaff.outletId,
+      openedByStaffId: existingTx?.openedByStaffId || currentStaff.id,
+      openedByStaffName: existingTx?.openedByStaffName || currentStaff.name,
+      sessionVersion: (existingTx?.sessionVersion || 0) + 1,
     };
 
     // 1. Record Omzet & PB1 immediately
@@ -920,7 +855,7 @@ export default function App() {
         paymentMethod,
         cashGiven,
         changeAmount,
-        cashierName: 'Budi Prasetyo',
+        cashierName: currentStaff.name,
       };
 
       setActiveTransactions((prev) => ({
@@ -1036,7 +971,7 @@ export default function App() {
   };
 
   const handleRejectCancellation = (requestId: string) => {
-    if (currentStaff?.role !== 'owner') {
+    if (!canApproveCancellation(currentStaff)) {
       window.alert('Hanya Outlet Manager (role Owner pada demo) yang dapat memproses pembatalan.');
       return;
     }
@@ -1044,7 +979,7 @@ export default function App() {
   };
 
   const handleApproveCancellation = (requestId: string) => {
-    if (currentStaff?.role !== 'owner') {
+    if (!canApproveCancellation(currentStaff)) {
       window.alert('Hanya Outlet Manager (role Owner pada demo) yang dapat menyetujui pengembalian stok.');
       return;
     }
@@ -1181,7 +1116,7 @@ export default function App() {
   }) => {
     const { transactionId, tableId, paymentMethod, cashGiven, changeAmount, discountAmount } = params;
     const currentTx = activeTransactions[transactionId];
-    if (!currentTx) return;
+    if (!currentTx || !canOperatePOS(currentStaff)) return;
 
     const now = new Date().toISOString();
     const unpaidItems = currentTx.allCurrentItems.filter((i) => !i.isPaid);
@@ -1198,7 +1133,7 @@ export default function App() {
       paymentMethod,
       cashGiven,
       changeAmount,
-      cashierName: 'Budi Prasetyo',
+      cashierName: currentStaff?.name || 'Staff',
       discountAmount,
       subtotal: totals.subtotal,
       serviceChargeAmount: totals.serviceChargeAmount,
@@ -1387,15 +1322,27 @@ export default function App() {
           <FloorPlanGrid
             tables={tables}
             transactions={activeTransactions}
-            onSelectTable={() => {
+            onSelectTable={(table) => {
               sounds.playTapSound();
+              const access = assertTableAccess(currentStaff, table, activeTransactions);
+              if (!access.ok) window.alert(access.message);
             }}
             onOpenOrder={(table) => {
-              sounds.playTapSound();
-              setOrderModalTable(table);
+              const access = assertTableAccess(currentStaff, table, activeTransactions);
+              if (!access.ok || !currentStaff) { if (!access.ok) window.alert(access.message); return; }
+              const created = createSession(table, currentStaff, table.guestCount || Math.min(table.capacity, 2), activeTransactions);
+              if (!created.ok) { window.alert(created.message); return; }
+              if (created.created) {
+                setActiveTransactions(prev => ({ ...prev, [created.transaction.id]: created.transaction }));
+                const opened = { ...table, status: 'occupied' as const, currentTransactionId: created.transaction.id, guestCount: created.transaction.guestCount, openedAt: created.transaction.openedAt, waiterName: currentStaff.name, outletId: created.transaction.outletId, sessionVersion: 1 };
+                setTables(prev => prev.map(t => t.id === table.id ? opened : t));
+                setOrderModalTable(opened);
+              } else { setOrderModalTable({ ...table, status: 'occupied', currentTransactionId: created.transaction.id }); }
             }}
             onOpenPayment={(table) => {
               sounds.playTapSound();
+              const access = assertTableAccess(currentStaff, table, activeTransactions);
+              if (!access.ok) { window.alert(access.message); return; }
               setPaymentModalTable(table);
             }}
             onOpenChecker={(table) => {
@@ -1424,6 +1371,7 @@ export default function App() {
           onSubmitOrder={handleSubmitOrder}
           onSubmitPaymentFirstOrder={handleSubmitPaymentFirstOrder}
           menuStock={menuStock}
+          staffName={currentStaff?.name}
         />
       )}
 
