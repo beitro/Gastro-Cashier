@@ -32,7 +32,6 @@ import { WaiterCheckerModal } from './components/WaiterCheckerModal';
 import { PaymentModal } from './components/PaymentModal';
 import { SalesSummaryModal } from './components/SalesSummaryModal';
 import { KDSModal } from './components/KDSModal';
-import { InventoryModal } from './components/InventoryModal';
 import { GoogleSheetsModal } from './components/GoogleSheetsModal';
 import { LoginModal } from './components/LoginModal';
 import { FinanceView } from './components/FinanceView';
@@ -1347,7 +1346,7 @@ export default function App() {
         setSoundEnabled={setSoundEnabled}
         onResetData={handleResetData}
         recentTicketsCount={allPrintTickets.length}
-        lowStockAlertCount={rawMaterials.filter((m) => m.currentStock <= m.minStock).length}
+        lowStockAlertCount={Object.values(menuStock).filter((stock) => stock === 0).length}
         activeKdsCount={countActiveKdsItems(activeTransactions)}
         waiterPickupCount={countWaiterPickupItems(activeTransactions)}
         paymentFlowMode={paymentFlowMode}
@@ -1478,24 +1477,15 @@ export default function App() {
 
       {/* INVENTORY & MENU STOCK CONTROL */}
       {activeTab === 'inventory' && (
-        <>
-          <MenuStockControl
-            menuStock={menuStock}
-            transactions={activeTransactions}
-            requests={cancellationRequests}
-            isManager={currentStaff?.role === 'owner'}
-            currentStaffName={currentStaff?.name || 'Staff'}
-            onRequestCancellation={handleRequestCancellation}
-            onApproveCancellation={handleApproveCancellation}
-            onRejectCancellation={handleRejectCancellation}
-          />
-        <InventoryModal
-          materials={rawMaterials}
-          onClose={() => setActiveTab('floor')}
-          onRestockMaterial={handleRestockMaterial}
-          onOpenGoogleSheets={() => handleOpenGoogleSheets('inventory')}
+        <MenuStockControl
+          menuStock={menuStock}
+          transactions={activeTransactions}
+          requests={cancellationRequests}
+          isManager={currentStaff?.role === 'owner'}
+          onRequestCancellation={handleRequestCancellation}
+          onApproveCancellation={handleApproveCancellation}
+          onRejectCancellation={handleRejectCancellation}
         />
-        </>
       )}
 
       {/* PRINTER AUTO-ROUTING HUB MODAL */}
