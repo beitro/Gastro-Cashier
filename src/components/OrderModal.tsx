@@ -74,6 +74,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   table,
   existingTransaction,
   menuStock,
+  staffName,
   paymentFlowMode,
   onChangePaymentFlowMode,
   onClose,
