@@ -37,6 +37,7 @@ import { GoogleSheetsModal } from './components/GoogleSheetsModal';
 import { LoginModal } from './components/LoginModal';
 import { FinanceView } from './components/FinanceView';
 import { OwnerDashboardView } from './components/OwnerDashboardView';
+import { MenuStockControl, CancellationRequest } from './components/MenuStockControl';
 
 const STORAGE_KEY_TABLES = 'resto_pos_tables_v1';
 const STORAGE_KEY_TRANSACTIONS = 'resto_pos_tx_v1';
@@ -47,6 +48,7 @@ const STORAGE_KEY_PAYMENT_MODE = 'resto_pos_payment_mode_v1';
 const STORAGE_KEY_STAFF = 'resto_pos_staff_v1';
 const STORAGE_KEY_PETTY_CASH = 'resto_pos_petty_cash_v1';
 const STORAGE_KEY_MENU_STOCK = 'resto_pos_menu_stock_v1';
+const STORAGE_KEY_CANCELLATIONS = 'resto_pos_cancellation_requests_v1';
 
 // Seed sample active transactions for occupied tables
 const INITIAL_TRANSACTIONS: Record<string, Transaction> = {
@@ -488,6 +490,14 @@ export default function App() {
     return true;
   };
 
+  const [cancellationRequests, setCancellationRequests] = useState<CancellationRequest[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_CANCELLATIONS);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
   const [paymentFlowMode, setPaymentFlowMode] = useState<PaymentFlowMode>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_PAYMENT_MODE);
@@ -600,11 +610,12 @@ export default function App() {
       localStorage.setItem(STORAGE_KEY_TICKETS, JSON.stringify(allPrintTickets));
       localStorage.setItem(STORAGE_KEY_MATERIALS, JSON.stringify(rawMaterials));
       localStorage.setItem(STORAGE_KEY_MENU_STOCK, JSON.stringify(menuStock));
+      localStorage.setItem(STORAGE_KEY_CANCELLATIONS, JSON.stringify(cancellationRequests));
       localStorage.setItem(STORAGE_KEY_PAYMENT_MODE, paymentFlowMode);
       if (currentStaff) localStorage.setItem(STORAGE_KEY_STAFF, JSON.stringify(currentStaff));
       localStorage.setItem(STORAGE_KEY_PETTY_CASH, JSON.stringify(pettyCashEntries));
     } catch {}
-  }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, menuStock, paymentFlowMode, currentStaff, pettyCashEntries]);
+  }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, menuStock, cancellationRequests, paymentFlowMode, currentStaff, pettyCashEntries]);
 
   // RESET DEMO DATA
   const handleResetData = () => {
@@ -620,6 +631,7 @@ export default function App() {
     const initialMenuStock = Object.fromEntries(MENU_ITEMS.map((item) => [item.id, item.stock]));
     menuStockRef.current = initialMenuStock;
     setMenuStock(initialMenuStock);
+    setCancellationRequests([]);
     setPaymentFlowMode('payment_last');
     setPettyCashEntries([
       {
@@ -1011,6 +1023,52 @@ export default function App() {
       setActiveTab('checker');
       setShowCheckerModal(true);
     }
+  };
+
+  const handleRequestCancellation = (request: Omit<CancellationRequest, 'id' | 'requestedAt' | 'requestedBy'>) => {
+    const exists = cancellationRequests.some((entry) => entry.transactionId === request.transactionId && entry.itemId === request.itemId);
+    if (exists) return;
+    setCancellationRequests((prev) => [{
+      ...request,
+      id: `pending:${Date.now()}:${request.itemId}`,
+      requestedAt: new Date().toISOString(),
+      requestedBy: currentStaff?.name || 'Staff',
+    }, ...prev]);
+  };
+
+  const handleRejectCancellation = (requestId: string) => {
+    if (currentStaff?.role !== 'owner') {
+      window.alert('Hanya Outlet Manager (role Owner pada demo) yang dapat memproses pembatalan.');
+      return;
+    }
+    setCancellationRequests((prev) => prev.filter((request) => request.id !== requestId));
+  };
+
+  const handleApproveCancellation = (requestId: string) => {
+    if (currentStaff?.role !== 'owner') {
+      window.alert('Hanya Outlet Manager (role Owner pada demo) yang dapat menyetujui pengembalian stok.');
+      return;
+    }
+    const request = cancellationRequests.find((entry) => entry.id === requestId);
+    if (!request) return;
+    const tx = activeTransactions[request.transactionId];
+    const item = tx?.allCurrentItems.find((entry) => entry.id === request.itemId);
+    if (!tx || !item || item.isServed || ['cooking', 'ready', 'handed_off'].includes(item.cookingStatus || '')) {
+      window.alert('Item sudah diproses/tersaji atau tidak lagi aktif. Stok tidak dikembalikan.');
+      setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
+      return;
+    }
+    const nextStock = { ...menuStockRef.current, [request.menuItemId]: (menuStockRef.current[request.menuItemId] || 0) + item.quantity };
+    menuStockRef.current = nextStock;
+    setMenuStock(nextStock);
+    const remainingItems = tx.allCurrentItems.filter((entry) => entry.id !== item.id);
+    const remainingBatches = tx.batches.map((batch) => ({ ...batch, items: batch.items.filter((entry) => entry.id !== item.id) })).filter((batch) => batch.items.length > 0);
+    const totals = calculateOrderTotals(remainingItems, tx.discountAmount);
+    setActiveTransactions((prev) => ({
+      ...prev,
+      [tx.id]: { ...tx, allCurrentItems: remainingItems, batches: remainingBatches, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount },
+    }));
+    setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
   };
 
   // RestoSync Feature - Quick Restock Material
@@ -1418,14 +1476,26 @@ export default function App() {
         />
       )}
 
-      {/* INVENTORY & RECIPE BOM MODAL - RestoSync Feature */}
+      {/* INVENTORY & MENU STOCK CONTROL */}
       {activeTab === 'inventory' && (
+        <>
+          <MenuStockControl
+            menuStock={menuStock}
+            transactions={activeTransactions}
+            requests={cancellationRequests}
+            isManager={currentStaff?.role === 'owner'}
+            currentStaffName={currentStaff?.name || 'Staff'}
+            onRequestCancellation={handleRequestCancellation}
+            onApproveCancellation={handleApproveCancellation}
+            onRejectCancellation={handleRejectCancellation}
+          />
         <InventoryModal
           materials={rawMaterials}
           onClose={() => setActiveTab('floor')}
           onRestockMaterial={handleRestockMaterial}
           onOpenGoogleSheets={() => handleOpenGoogleSheets('inventory')}
         />
+        </>
       )}
 
       {/* PRINTER AUTO-ROUTING HUB MODAL */}
