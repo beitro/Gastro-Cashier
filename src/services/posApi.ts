@@ -63,6 +63,7 @@ function mapOrder(row: ApiRow): OrderItem {
     batchNumber: Number(row.batch_number || 1),
     isServed: Boolean(row.is_served),
     cookingStatus: row.cooking_status || 'queue',
+    servedAt: row.served_at || undefined,
   };
 }
 
@@ -132,6 +133,17 @@ export async function openApiSession(table: Table, guestCount: number, waiterSta
   return request<ApiRow>('/api/sessions', {
     method: 'POST',
     body: JSON.stringify({ tableId: table.id, guestCount, waiterStaffId }),
+  });
+}
+
+export async function updateApiOrderItem(
+  sessionId: string,
+  itemId: string,
+  update: { cookingStatus?: 'queue' | 'cooking' | 'ready' | 'handed_off'; isServed?: boolean },
+): Promise<ApiRow> {
+  return request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/orders/' + encodeURIComponent(itemId), {
+    method: 'PATCH',
+    body: JSON.stringify(update),
   });
 }
 

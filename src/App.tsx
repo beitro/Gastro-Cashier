@@ -23,7 +23,7 @@ import {
 } from './utils/posCalculations';
 import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
-import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock, mapApiMenuToMenuItems } from './services/posApi';
+import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, updateApiOrderItem, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock, mapApiMenuToMenuItems } from './services/posApi';
 
 import { Navbar, NavTabId } from './components/Navbar';
 import { FloorPlanGrid } from './components/FloorPlanGrid';
@@ -520,6 +520,16 @@ export default function App() {
 
   const [apiMenu, setApiMenu] = useState<Record<string, any>[]>([]);
 
+  const refreshApiSnapshot = async () => {
+    const snapshot = await loadPosSnapshot();
+    setTables(snapshot.tables);
+    setActiveTransactions(snapshot.transactions);
+    setApiMenu(snapshot.menu);
+    const stock = mapApiMenuToStock(snapshot.menu, MENU_ITEMS);
+    menuStockRef.current = stock;
+    setMenuStock(stock);
+  };
+
   useEffect(() => {
     if (!currentStaff) return;
     if (!getApiToken()) { setCurrentStaff(null); return; }
@@ -726,49 +736,18 @@ export default function App() {
     window.alert('Payment First sementara dinonaktifkan sampai backend mendukung pembayaran parsial dan sesi layanan setelah pelunasan. Gunakan Payment Last agar pembayaran tercatat atomik di database.');
   };
 
-  // KDS Dapur & Barista Cooking Status Management
-  const handleUpdateCookingStatus = (transactionId: string, itemId: string, status: CookingStatus) => {
-    const now = new Date().toISOString();
-    setActiveTransactions((prev) => {
-      const tx = prev[transactionId];
-      if (!tx) return prev;
-
-      const updatedItems = tx.allCurrentItems.map((item) =>
-        item.id === itemId
-          ? {
-              ...item,
-              cookingStatus: status,
-              handedOffAt: status === 'handed_off' ? now : item.handedOffAt,
-            }
-          : item
-      );
-
-      const updatedBatches = tx.batches.map((b) => ({
-        ...b,
-        items: b.items.map((item) =>
-          item.id === itemId
-            ? {
-                ...item,
-                cookingStatus: status,
-                handedOffAt: status === 'handed_off' ? now : item.handedOffAt,
-              }
-            : item
-        ),
-      }));
-
-      return {
-        ...prev,
-        [transactionId]: {
-          ...tx,
-          allCurrentItems: updatedItems,
-          batches: updatedBatches,
-        },
-      };
-    });
+  // KDS Dapur & Barista Cooking Status Management — persisted by the API.
+  const handleUpdateCookingStatus = async (transactionId: string, itemId: string, status: CookingStatus) => {
+    try {
+      await updateApiOrderItem(transactionId, itemId, { cookingStatus: status });
+      await refreshApiSnapshot();
+    } catch (error) {
+      window.alert('Status dapur gagal disimpan ke database: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   };
 
-  // KDS -> Waiter Ticket Handoff (removes completed items/ticket from KDS & moves to Waiter Checker)
-  const handleHandoffTicketToWaiter = (
+  // KDS -> Waiter Ticket Handoff (persist the handed-off status before opening Checker).
+  const handleHandoffTicketToWaiter = async (
     transactionId: string,
     options?: {
       stationFilter?: 'all' | 'kitchen' | 'bar';
@@ -776,22 +755,28 @@ export default function App() {
       openCheckerTableId?: string;
     }
   ) => {
-    setActiveTransactions((prev) => {
-      const tx = prev[transactionId];
-      if (!tx) return prev;
-      return {
-        ...prev,
-        [transactionId]: handoffTransactionItemsToWaiter(tx, {
-          stationFilter: options?.stationFilter,
-          onlyReady: options?.onlyReady,
-        }),
-      };
+    const tx = activeTransactions[transactionId];
+    if (!tx) return;
+    const handedOff = handoffTransactionItemsToWaiter(tx, {
+      stationFilter: options?.stationFilter,
+      onlyReady: options?.onlyReady,
     });
-
-    if (options?.openCheckerTableId) {
-      setCheckerModalTableId(options.openCheckerTableId);
-      setActiveTab('checker');
-      setShowCheckerModal(true);
+    const changed = handedOff.allCurrentItems.filter((item, index) =>
+      item.cookingStatus !== tx.allCurrentItems[index]?.cookingStatus
+    );
+    try {
+      await Promise.all(changed.map(item =>
+        updateApiOrderItem(transactionId, item.id, { cookingStatus: 'handed_off' })
+      ));
+      if (changed.length) await refreshApiSnapshot();
+      if (options?.openCheckerTableId) {
+        setCheckerModalTableId(options.openCheckerTableId);
+        setActiveTab('checker');
+        setShowCheckerModal(true);
+      }
+    } catch (error) {
+      await refreshApiSnapshot().catch(() => undefined);
+      window.alert('Serah-terima pesanan gagal disimpan: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -852,93 +837,48 @@ export default function App() {
     );
   };
 
-  // STEP 5: TOGGLE SERVED ITEM (Pencontrengan Waiter)
-  const handleToggleItemServed = (transactionId: string, itemId: string) => {
-    setActiveTransactions((prev) => {
-      const tx = prev[transactionId];
-      if (!tx) return prev;
-
-      const updatedItems = tx.allCurrentItems.map((item) =>
-        item.id === itemId
-          ? {
-              ...item,
-              isServed: !item.isServed,
-              servedAt: !item.isServed ? new Date().toISOString() : undefined,
-            }
-          : item
-      );
-
-      return {
-        ...prev,
-        [transactionId]: {
-          ...tx,
-          allCurrentItems: updatedItems,
-        },
-      };
-    });
-
-    // Also update tickets in state if present
-    setAllPrintTickets((prev) =>
-      prev.map((t) => ({
-        ...t,
-        items: t.items.map((i) =>
-          i.id === itemId
-            ? { ...i, isServed: !i.isServed }
-            : i
-        ),
-      }))
-    );
+  // STEP 5: TOGGLE SERVED ITEM (persisted by the API).
+  const handleToggleItemServed = async (transactionId: string, itemId: string) => {
+    const item = activeTransactions[transactionId]?.allCurrentItems.find(entry => entry.id === itemId);
+    if (!item) return;
+    try {
+      await updateApiOrderItem(transactionId, itemId, { isServed: !item.isServed });
+      await refreshApiSnapshot();
+      setAllPrintTickets(prev => prev.map(ticket => ({
+        ...ticket,
+        items: ticket.items.map(entry => entry.id === itemId ? { ...entry, isServed: !item.isServed } : entry),
+      })));
+    } catch (error) {
+      window.alert('Status penyajian gagal disimpan: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   };
 
-  // Mark all served for a table
-  const handleMarkAllServed = (transactionId: string) => {
-    const now = new Date().toISOString();
-    setActiveTransactions((prev) => {
-      const tx = prev[transactionId];
-      if (!tx) return prev;
-
-      const updatedItems = tx.allCurrentItems.map((item) => ({
-        ...item,
-        isServed: true,
-        cookingStatus: 'handed_off' as const,
-        servedAt: item.servedAt || now,
-      }));
-
-      return {
-        ...prev,
-        [transactionId]: {
-          ...tx,
-          allCurrentItems: updatedItems,
-        },
-      };
-    });
+  // Mark all served for a table (persist each item; server remains authoritative).
+  const handleMarkAllServed = async (transactionId: string) => {
+    const items = activeTransactions[transactionId]?.allCurrentItems || [];
+    try {
+      await Promise.all(items.filter(item => !item.isServed).map(item =>
+        updateApiOrderItem(transactionId, item.id, { cookingStatus: 'handed_off', isServed: true })
+      ));
+      await refreshApiSnapshot();
+    } catch (error) {
+      await refreshApiSnapshot().catch(() => undefined);
+      window.alert('Penandaan semua item gagal disimpan: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   };
 
-  // Mark all handed-off (Siap Antar) items served for a table
-  const handleMarkHandedOffServed = (transactionId: string) => {
-    const now = new Date().toISOString();
-    setActiveTransactions((prev) => {
-      const tx = prev[transactionId];
-      if (!tx) return prev;
-
-      const updatedItems = tx.allCurrentItems.map((item) =>
-        isItemWaitingForWaiter(item)
-          ? {
-              ...item,
-              isServed: true,
-              servedAt: now,
-            }
-          : item
-      );
-
-      return {
-        ...prev,
-        [transactionId]: {
-          ...tx,
-          allCurrentItems: updatedItems,
-        },
-      };
-    });
+  // Mark handed-off items served for a table (persisted by the API).
+  const handleMarkHandedOffServed = async (transactionId: string) => {
+    const items = activeTransactions[transactionId]?.allCurrentItems.filter(isItemWaitingForWaiter) || [];
+    try {
+      await Promise.all(items.map(item =>
+        updateApiOrderItem(transactionId, item.id, { isServed: true })
+      ));
+      await refreshApiSnapshot();
+    } catch (error) {
+      await refreshApiSnapshot().catch(() => undefined);
+      window.alert('Konfirmasi antar pesanan gagal disimpan: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   };
 
   // STEP 7: SETTLEMENT & CLOSE TABLE

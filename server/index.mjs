@@ -355,11 +355,39 @@ app.post('/api/sessions', authenticate, requirePosRole, asyncRoute(async (req,re
 }));
 app.get('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT b.id AS batch_id,b.batch_number,b.status AS batch_status,b.note,b.created_at,
-    oi.id,oi.menu_item_id,oi.item_name_snapshot,oi.category_snapshot,oi.destination,oi.unit_price,oi.quantity,oi.modifier_total,oi.line_total,oi.notes,oi.cooking_status,oi.is_served
+    oi.id,oi.menu_item_id,oi.item_name_snapshot,oi.category_snapshot,oi.destination,oi.unit_price,oi.quantity,oi.modifier_total,oi.line_total,oi.notes,oi.cooking_status,oi.is_served,oi.served_at
     FROM order_batches b LEFT JOIN order_items oi ON oi.tenant_id=b.tenant_id AND oi.outlet_id=b.outlet_id AND oi.batch_id=b.id
     WHERE b.tenant_id=$1 AND b.outlet_id=$2 AND b.session_id=$3 ORDER BY b.batch_number,oi.created_at`,
     [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]));
   res.json(rows.rows);
+}));
+
+app.patch('/api/sessions/:sessionId/orders/:itemId', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+  const { cookingStatus, isServed } = req.body || {};
+  const allowedStatuses = ['queue','cooking','ready','handed_off'];
+  if ((cookingStatus !== undefined && !allowedStatuses.includes(cookingStatus)) ||
+      (isServed !== undefined && typeof isServed !== 'boolean') ||
+      (cookingStatus === undefined && isServed === undefined)) {
+    return res.status(400).json({ error:'Status pesanan tidak valid.' });
+  }
+  const updated = await scoped(req, async c => {
+    const session = await c.query(
+      "SELECT id FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing') FOR UPDATE",
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]
+    );
+    if (!session.rowCount) return null;
+    const result = await c.query(`UPDATE order_items
+      SET cooking_status=COALESCE($5,cooking_status),
+          is_served=COALESCE($6,is_served),
+          served_at=CASE WHEN $6 IS TRUE THEN COALESCE(served_at,now()) WHEN $6 IS FALSE THEN NULL ELSE served_at END
+      WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND id=$4
+      RETURNING id,cooking_status,is_served,served_at`,
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,req.params.itemId,cookingStatus ?? null,isServed ?? null]
+    );
+    return result.rows[0] || null;
+  });
+  if (!updated) return res.status(404).json({ error:'Sesi atau item pesanan tidak ditemukan.' });
+  res.json(updated);
 }));
 app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const { items, note } = req.body || {};
