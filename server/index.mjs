@@ -161,7 +161,7 @@ async function issueSession(staffId, credentialColumn, credential, res) {
 
 app.post('/api/auth/pin', asyncRoute(async (req,res) => {
   const pin = String(req.body?.pin || '');
-  if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error:'PIN harus 4–8 digit.' });
+  if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error:'PIN harus tepat 4 digit.' });
   const retryAfter = await consumeAuthAttempt(req);
   if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
   const candidates = await transaction(async c => { await c.query("SELECT set_config('app.auth_lookup','true',true)"); return c.query("SELECT id,pin_hash FROM staff_accounts WHERE status='active' AND pin_hash IS NOT NULL"); });
