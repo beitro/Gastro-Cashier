@@ -156,16 +156,20 @@ export async function submitApiOrder(sessionId: string, items: OrderItem[], menu
     return { menuItemId, quantity: item.quantity, notes: item.notes || '' };
   });
   return request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/orders', {
-    method: 'POST', body: JSON.stringify({ items: payload }),
+    method: 'POST', body: JSON.stringify({ items: payload, idempotencyKey: 'order-' + crypto.randomUUID() }),
   });
 }
 
-export async function settleApiSession(sessionId: string, method: 'cash' | 'qris' | 'card', discountAmount: number, cashReceived?: number, cardBank?: string): Promise<ApiRow> {
+export async function settleApiSession(sessionId: string, method: 'cash' | 'qris' | 'card' | 'transfer', discountAmount: number, cashReceived?: number, cardBank?: string): Promise<ApiRow> {
   const idempotencyKey = ['pos', sessionId, method, Number(discountAmount), method === 'cash' ? Number(cashReceived || 0) : 0].join('-');
   return request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/payments', {
     method: 'POST',
     body: JSON.stringify({ method, discountAmount, cashReceived: method === 'cash' ? cashReceived : undefined, cardBank, idempotencyKey }),
   });
+}
+
+export async function cancelApiOrderItem(itemId: string): Promise<ApiRow> {
+  return request<ApiRow>('/api/order-items/' + encodeURIComponent(itemId) + '/cancel', { method: 'PATCH', body: JSON.stringify({}) });
 }
 
 export function mapPaymentToTransaction(transaction: Transaction, payment: ApiRow): Transaction {
@@ -193,7 +197,7 @@ export function mapApiMenuToStock(menu: ApiRow[], fallback: MenuItem[]): Record<
   const stock: Record<string, number> = {};
   for (const item of fallback) {
     const match = menu.find(row => String(row.sku || '') === item.id);
-    stock[item.id] = match ? 999 : 0;
+    stock[item.id] = !match ? 0 : match.track_stock ? Math.max(0, Number(match.stock_quantity || 0)) : 999;
   }
   return stock;
 }
@@ -206,7 +210,7 @@ export function mapApiMenuToMenuItems(menu: ApiRow[]): MenuItem[] {
     destination: row.destination === 'bar' ? 'bar' : 'kitchen',
     price: Number(row.price || 0),
     cost: Number(row.cost_price || 0),
-    stock: 999,
+    stock: row.track_stock ? Math.max(0, Number(row.stock_quantity || 0)) : 999,
     image: row.image_url || undefined,
     description: row.description || undefined,
   }));
