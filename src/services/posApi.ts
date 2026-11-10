@@ -135,6 +135,17 @@ export async function openApiSession(table: Table, guestCount: number, waiterSta
   });
 }
 
+export async function updateApiOrderItem(
+  sessionId: string,
+  itemId: string,
+  update: { cookingStatus?: 'queue' | 'cooking' | 'ready' | 'handed_off'; isServed?: boolean },
+): Promise<ApiRow> {
+  return request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/orders/' + encodeURIComponent(itemId), {
+    method: 'PATCH',
+    body: JSON.stringify(update),
+  });
+}
+
 export async function submitApiOrder(sessionId: string, items: OrderItem[], menu: ApiRow[]): Promise<ApiRow> {
   const bySku = new Map(menu.filter(row => row.sku).map(row => [String(row.sku), String(row.id)]));
   const payload = items.map(item => {
