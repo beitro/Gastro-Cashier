@@ -229,8 +229,9 @@ app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=
 }));
 app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const role=req.body?.role,status=req.body?.status;
-  if((role!==undefined&&!ADMIN_ROLES.includes(role))||(status!==undefined&&!['active','inactive','blocked'].includes(status))||(role===undefined&&status===undefined))return res.status(400).json({error:'Role atau status tidak valid.'});
+  if((role!==undefined&&!ADMIN_ROLES.includes(role))||(status!==undefined&&!['active','inactive'].includes(status))||(role===undefined&&status===undefined))return res.status(400).json({error:'Role atau status tidak valid.'});
   if(req.params.staffId===req.auth.staff_id&&status&&status!=='active')return res.status(400).json({error:'Owner tidak dapat menonaktifkan akun sendiri.'});
+  if(req.params.staffId===req.auth.staff_id&&role&&role!=='owner')return res.status(400).json({error:'Owner tidak dapat menurunkan role akunnya sendiri.'});
   const result=await adminScoped(req,async c=>{
     const current=await c.query('SELECT tm.id,tm.role_code,a.status FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$3 WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF tm,a',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
     if(!current.rowCount)return {status:404,error:'Staff tidak ditemukan di outlet ini.'};
