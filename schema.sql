@@ -241,7 +241,7 @@ $$;
 CREATE TRIGGER trg_audit_logs_immutable BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION reject_audit_log_mutation();
 
-CREATE VIEW v_table_board AS
+CREATE VIEW v_table_board WITH (security_invoker = true) AS
 SELECT t.tenant_id,t.outlet_id,t.id AS table_id,t.table_code,t.display_name,t.area,t.capacity,t.is_active,
  CASE WHEN s.status='billing' THEN 'billing' WHEN s.status='active' THEN 'occupied' ELSE 'available' END AS table_state,
  s.id AS session_id,s.session_number,s.guest_count,s.opened_at,s.waiter_staff_id,s.version AS session_version

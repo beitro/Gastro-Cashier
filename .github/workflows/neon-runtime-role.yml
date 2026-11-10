@@ -1,0 +1,53 @@
+name: Provision Neon runtime role
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provision-runtime-role:
+    if: ${{ vars.ENABLE_NEON_READONLY_CHECK == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install PostgreSQL client dependency
+        run: npm install --no-save --no-package-lock pg@^8.16.3
+      - name: Provision least-privileged runtime role
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          GASTRO_RUNTIME_DB_PASSWORD: ${{ secrets.GASTRO_RUNTIME_DB_PASSWORD }}
+        run: node scripts/db-provision-runtime-role.mjs
+      - name: Verify runtime login and RLS role attributes
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          GASTRO_RUNTIME_DB_PASSWORD: ${{ secrets.GASTRO_RUNTIME_DB_PASSWORD }}
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const source = new URL(process.env.NEON_DATABASE_URL);
+          source.username = 'gastro_runtime';
+          source.password = process.env.GASTRO_RUNTIME_DB_PASSWORD;
+          const client = new pg.Client({ connectionString: source.toString(), connectionTimeoutMillis: 10000 });
+          try {
+            await client.connect();
+            const result = await client.query(`
+              SELECT current_database() AS database, current_user AS role,
+                (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user) AS elevated,
+                has_table_privilege(current_user,'public.staff_accounts','SELECT') AS staff_read,
+                has_table_privilege(current_user,'public.dining_tables','SELECT') AS tables_read
+            `);
+            const row = result.rows[0];
+            if (row.database !== 'Gastro Cashier' || row.role !== 'gastro_runtime' || row.elevated || row.staff_read || !row.tables_read) {
+              throw new Error('Runtime connection verification failed');
+            }
+            console.log(JSON.stringify({ connection: 'success', database: row.database, role: row.role,
+              elevated: row.elevated, staffAccountsAccessible: row.staff_read, diningTablesReadable: row.tables_read }, null, 2));
+          } finally {
+            await client.end().catch(() => {});
+          }
+          NODE

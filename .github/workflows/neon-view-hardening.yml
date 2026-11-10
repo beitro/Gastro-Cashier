@@ -1,0 +1,22 @@
+name: Neon view security hardening
+
+on:
+  push:
+    branches:
+      - feat/neon-postgres-safe-foundation
+
+jobs:
+  harden-neon-table-board-view:
+    if: ${{ contains(github.event.head_commit.message, '[harden-neon-view]') && vars.ENABLE_NEON_READONLY_CHECK == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-package-lock
+      - name: Apply narrow, idempotent view security hardening
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: node scripts/db-hardening.mjs
