@@ -63,17 +63,11 @@ DROP POLICY IF EXISTS tenant_membership_admin_update ON tenant_memberships;
 CREATE POLICY tenant_membership_admin_insert ON tenant_memberships FOR INSERT
   WITH CHECK (current_setting('app.staff_admin',true)='true'
     AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
-    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm
-      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
-        AND actor_tm.tenant_id=tenant_memberships.tenant_id
-        AND actor_tm.role_code='owner' AND actor_tm.status='active'));
+    AND nullif(current_setting('app.actor_staff_id',true),'') IS NOT NULL);
 CREATE POLICY tenant_membership_admin_update ON tenant_memberships FOR UPDATE
   USING (current_setting('app.staff_admin',true)='true'
     AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
-    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm
-      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
-        AND actor_tm.tenant_id=tenant_memberships.tenant_id
-        AND actor_tm.role_code='owner' AND actor_tm.status='active'))
+    AND nullif(current_setting('app.actor_staff_id',true),'') IS NOT NULL)
   WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 
 DROP POLICY IF EXISTS outlet_membership_admin_insert ON outlet_memberships;
@@ -82,12 +76,10 @@ CREATE POLICY outlet_membership_admin_insert ON outlet_memberships FOR INSERT
   WITH CHECK (current_setting('app.staff_admin',true)='true'
     AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid
-    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm JOIN outlet_memberships actor_om
-      ON actor_om.tenant_id=actor_tm.tenant_id AND actor_om.tenant_membership_id=actor_tm.id
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm
       WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
         AND actor_tm.tenant_id=outlet_memberships.tenant_id
-        AND actor_tm.role_code='owner' AND actor_tm.status='active'
-        AND actor_om.outlet_id=outlet_memberships.outlet_id AND actor_om.status='active'));
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'));
 CREATE POLICY outlet_membership_admin_update ON outlet_memberships FOR UPDATE
   USING (current_setting('app.staff_admin',true)='true'
     AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
