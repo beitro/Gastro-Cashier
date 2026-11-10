@@ -1,0 +1,18 @@
+meta {
+  name: Adjust Menu Stock
+  type: http
+  seq: 1
+}
+put {
+  url: {{baseUrl}}/api/menu/{{menuItemId}}/stock
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{managerToken}}
+}
+body:json {
+  quantity: 1,
+  trackStock: true,
+  note: "Concurrency test fixture"
+}
