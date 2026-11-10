@@ -41,7 +41,8 @@ try {
     (SELECT count(*) FROM staff_accounts)::int AS staff_accounts,
     (SELECT count(*) FROM staff_sessions)::int AS staff_sessions,
     (SELECT count(*) FROM dining_tables)::int AS dining_tables,
-    (SELECT count(*) FROM v_table_board)::int AS table_board`);
+    (SELECT count(*) FROM v_table_board)::int AS table_board,
+    (SELECT count(*) FROM auth_rate_limits)::int AS auth_rate_limits`);
   if (Object.values(noContext.rows[0]).some(Number)) fail('query without tenant/outlet context returned rows: ' + JSON.stringify(noContext.rows[0]));
 
   await c.query("SELECT set_config('app.auth_lookup','true',true)");
