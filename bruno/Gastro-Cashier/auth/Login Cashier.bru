@@ -9,7 +9,7 @@ post {
   auth: none
 }
 body:json {
-  pin: {{cashierPin}}
+  pin: "{{cashierPin}}"
 }
 script:post-response {
   bru.setEnvVar("cashierToken", res.body.token);
