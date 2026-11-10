@@ -11,8 +11,8 @@ const API='/api/admin/staff';
 const matrix = [
   ['Cockpit Owner','✓','—','—'],['POS & Floor Plan','✓','✓','—'],['KDS & Checker','✓','✓','—'],
   ['Stok Menu','✓','✓','✓'],['Pembayaran / Settlement','✓','✓','—'],['Pembukuan & PB1','✓','—','✓'],
-  ['Kas Kecil','✓','—','✓'],['Approval pembatalan','✓','—','—'],['Kelola staff & role','✓','—','—'],
-  ['Reset / enrollment PIN','✓','—','—'],['Enrollment / cabut NFC','✓','—','—'],['Nonaktifkan & cabut sesi staff','✓','—','—'],
+  ['Kas Kecil','✓','—','✓'],['Approval pembatalan','✓','—','—'],['Kelola staff & role','READ ONLY','—','—'],
+  ['Reset / enrollment PIN','READ ONLY','—','—'],['Enrollment / cabut NFC','READ ONLY','—','—'],['Nonaktifkan & cabut sesi staff','READ ONLY','—','—'],
 ];
 function authHeaders() {
   const token=localStorage.getItem('gastro_cashier_api_token');
