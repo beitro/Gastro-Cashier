@@ -79,3 +79,15 @@ Every step is fail-fast. Migration cannot start if backup creation, encryption/d
 - After successful verification, set the API's server-only `DATABASE_URL` to the `gastro_runtime` connection string and set `RLS_CONTEXT_HMAC_SECRET` in the API hosting provider to the exact same value as `NEON_RLS_CONTEXT_HMAC_SECRET`. Keep admin credentials out of the API runtime. The workflow does not modify application hosting secrets or restart the API.
 - `BOOTSTRAP_DATABASE_URL` remains a separate temporary privileged connection for the token-protected bootstrap endpoint; remove it after one-time provisioning.
 - Bearer tokens are currently held in browser localStorage. Move to Secure/HttpOnly/SameSite cookies before public deployment.
+
+
+## Menu-level stock and payment settlement migration
+
+The current POS stock model is **per menu item**, not ingredient/recipe consumption. Migration `006_menu_stock_and_payment_settlement.sql` adds:
+- `menu_stock`: one tracked quantity per tenant/outlet/menu item.
+- `menu_stock_movements`: append-only opening, sale, return and adjustment ledger.
+- Forced RLS policies using the signed transaction-local context.
+- Pending settlement metadata for QRIS, card and transfer. Cash remains immediately settled.
+- Runtime grants for stock reads/adjustments, stock ledger inserts, order batch cancellation, payment confirmation and order idempotency.
+
+Apply migration 006 only after migrations 001–005 on the isolated development branch and after the database-safety CI passes. Do not add it to the production deployment workflow without a separate reviewed backup/deployment plan. No live payment provider is integrated: non-cash payment settlement is confirmed through the protected API after a Manager/Owner/Finance verifies the provider reference.
