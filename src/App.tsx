@@ -23,7 +23,7 @@ import {
 } from './utils/posCalculations';
 import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
-import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock } from './services/posApi';
+import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock, mapApiMenuToMenuItems } from './services/posApi';
 
 import { Navbar, NavTabId } from './components/Navbar';
 import { FloorPlanGrid } from './components/FloorPlanGrid';
@@ -1157,6 +1157,7 @@ export default function App() {
       {orderModalTable && (
         <OrderModal
           table={orderModalTable}
+          menuItems={mapApiMenuToMenuItems(apiMenu)}
           existingTransaction={
             orderModalTable.currentTransactionId
               ? activeTransactions[orderModalTable.currentTransactionId]
