@@ -236,7 +236,7 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
     const current=await c.query('SELECT tm.id,tm.role_code,a.status FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$3 WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF tm,a',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
     if(!current.rowCount)return {status:404,error:'Staff tidak ditemukan di outlet ini.'};
     const tenantCount=await c.query('SELECT count(DISTINCT tenant_id)::int AS count FROM tenant_memberships WHERE staff_id=$1',[req.params.staffId]);
-    if(tenantCount.rows[0].count>1)return {status:409,error:'Akun ini terhubung ke beberapa tenant; perubahan status akun global harus melalui administrasi pusat.'};
+    if(tenantCount.rows[0].count>1&&status!==undefined)return {status:409,error:'Akun ini terhubung ke beberapa tenant; perubahan status akun global harus melalui administrasi pusat.'};
     const old=current.rows[0],nextRole=role||old.role_code,nextStatus=status||old.status;
     if(old.role_code==='owner'&&(nextRole!=='owner'||nextStatus!=='active')){
       const owners=await c.query("SELECT count(*)::int AS count FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 AND om.status='active' WHERE tm.tenant_id=$1 AND tm.role_code='owner' AND tm.status='active'",[req.auth.tenant_id,req.auth.outlet_id]);
