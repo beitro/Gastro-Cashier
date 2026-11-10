@@ -18,6 +18,7 @@ function signedContext(claims) {
 }
 async function applyContext(client, claims) {
   const tx=await client.query('SELECT txid_current()::text AS txid');
+  await client.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[claims.tenant_id || '',claims.outlet_id || '']);
   await client.query("SELECT set_config('app.context_token',$1,true)",[signedContext({...claims,txid:tx.rows[0].txid})]);
 }
 const slug = randomUUID().replaceAll('-','').slice(0,16);
@@ -205,6 +206,23 @@ try {
     app_private.rls_context()->>'role_code' AS role_code,
     EXISTS(SELECT 1 FROM tenant_memberships actor_tm WHERE actor_tm.staff_id=$1 AND actor_tm.tenant_id=$2 AND actor_tm.role_code='owner' AND actor_tm.status='active') AS owner_exists`,[ids.staffA,ids.tenantA])).rows[0];
   if(!adminGate.has_admin_cap || adminGate.role_code!=='owner' || !adminGate.owner_exists) throw new Error('Signed Owner RLS gate false: '+JSON.stringify(adminGate));
+  phase('verify staff-admin target membership isolation and tenant GUC binding');
+  const staffVisibleA=await runtime.query('SELECT id FROM staff_accounts ORDER BY id');
+  if(staffVisibleA.rowCount!==1 || staffVisibleA.rows[0].id!==ids.staffA) throw new Error('Tenant A admin SELECT exposed staff outside tenant A.');
+  const crossUpdateA=await runtime.query('UPDATE staff_accounts SET display_name=$1 WHERE id=$2 RETURNING id',['Cross-tenant mutation A to B',ids.staffB]);
+  if(crossUpdateA.rowCount!==0) throw new Error('Tenant A admin updated staff belonging only to tenant B.');
+  await applyContext(runtime,{tenant_id:ids.tenantB,outlet_id:ids.outletB,actor_staff_id:ids.staffB,role_code:'owner',capabilities:['tenant_scope','staff_admin']});
+  const staffVisibleB=await runtime.query('SELECT id FROM staff_accounts ORDER BY id');
+  if(staffVisibleB.rowCount!==1 || staffVisibleB.rows[0].id!==ids.staffB) throw new Error('Tenant B admin SELECT exposed staff outside tenant B.');
+  const crossUpdateB=await runtime.query('UPDATE staff_accounts SET display_name=$1 WHERE id=$2 RETURNING id',['Cross-tenant mutation B to A',ids.staffA]);
+  if(crossUpdateB.rowCount!==0) throw new Error('Tenant B admin updated staff belonging only to tenant A.');
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',pending_staff_id:ids.staffCreated,capabilities:['tenant_scope','staff_admin']});
+  await runtime.query("SELECT set_config('app.tenant_id','',true)");
+  if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==0) throw new Error('Valid signed context without app.tenant_id exposed staff rows.');
+  await runtime.query("SELECT set_config('app.tenant_id',$1,true)",[ids.tenantB]);
+  if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==0) throw new Error('Mismatched app.tenant_id bypassed signed tenant scope.');
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',pending_staff_id:ids.staffCreated,capabilities:['tenant_scope','staff_admin']});
+  await assertDenied(runtime,'UPDATE tenant_memberships SET tenant_id=$1 WHERE tenant_id=$2 AND staff_id=$3',[ids.tenantB,ids.tenantA,ids.staffA],'Changing staff tenant membership through admin UPDATE');
   const createdStaff=(await runtime.query('INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[ids.staffCreated,`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00'])).rows[0];
   const createdMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'cashier') RETURNING id",[ids.tenantA,ids.staffCreated])).rows[0];
   await runtime.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'cashier')",[ids.tenantA,ids.outletA,createdMembership.id]);
