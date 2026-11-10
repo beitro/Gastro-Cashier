@@ -537,6 +537,35 @@ app.patch('/api/order-batches/:batchId/cancel', authenticate, requireManagerOrOw
   res.status(result.status).json(result.body);
 }));
 
+app.patch('/api/order-items/:itemId/cancel', authenticate, requireManagerOrOwner, asyncRoute(async(req,res)=>{
+  const result=await scoped(req,async c=>{
+    const ref=await c.query('SELECT session_id FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
+    if(!ref.rowCount) return {status:404,body:{error:'Item pesanan tidak ditemukan.'}};
+    const session=await c.query('SELECT id,status FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,ref.rows[0].session_id]);
+    const item=await c.query('SELECT * FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
+    if(item.rows[0].cooking_status==='cancelled') return {status:200,body:{ok:true,alreadyCancelled:true,itemId:req.params.itemId}};
+    if(!session.rowCount||!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Sesi sudah ditutup; item tidak dapat dibatalkan.'}};
+    if(item.rows[0].is_served||['cooking','ready','handed_off'].includes(item.rows[0].cooking_status)) return {status:409,body:{error:'Item sudah diproses atau disajikan; pembatalan ditolak.'}};
+    const pending=await c.query("SELECT id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND status='pending' LIMIT 1",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    if(pending.rowCount) return {status:409,body:{error:'Pembayaran masih pending. Void pembayaran terlebih dahulu.',pendingPaymentId:pending.rows[0].id}};
+    await c.query("UPDATE order_items SET cooking_status='cancelled' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
+    let restored=false;
+    const stock=await c.query('SELECT track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
+    if(stock.rowCount&&stock.rows[0].track_stock) {
+      await c.query('UPDATE menu_stock SET quantity=quantity+$1,updated_at=now(),updated_by_staff_id=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND menu_item_id=$5',[item.rows[0].quantity,req.auth.staff_id,req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
+      await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,order_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
+        VALUES($1,$2,$3,$4,'return',$5,'order_item',$4,'Manager item cancellation',$6)`,
+        [req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id,item.rows[0].id,item.rows[0].quantity,req.auth.staff_id]);
+      restored=true;
+    }
+    await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'order_item.cancelled','order_item',$4,$5::jsonb)",
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.itemId,JSON.stringify({stockRestored:restored,quantity:item.rows[0].quantity})]);
+    await c.query('UPDATE dining_sessions SET version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    return {status:200,body:{ok:true,itemId:req.params.itemId,stockRestored:restored}};
+  });
+  res.status(result.status).json(result.body);
+}));
+
 app.patch('/api/payments/:paymentId/settle', authenticate, requireSettlementRole, asyncRoute(async(req,res)=>{
   const providerReference=String(req.body?.providerReference||'').trim();
   const settlementNote=req.body?.note?String(req.body.note).trim():null;
