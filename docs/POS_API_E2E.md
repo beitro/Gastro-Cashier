@@ -134,3 +134,14 @@ npm run test:e2e:inventory
 This E2E uses an Owner credential for the approval actions. The endpoint also authorizes Manager; test the Manager role separately with a real Manager account. Provider references in this test are simulated strings: no live QRIS, card-acquirer, or bank-transfer provider/webhook is configured.
 
 The Bruno collection is in `bruno/Gastro-Cashier`. Import that folder in Bruno, configure the Development environment, log in, then run the stock, order, cancellation and payment requests. For a concurrency test, open two sessions on separate tables, set the same menu stock to 1, and submit the same menu item from two independent request tabs at the same time using different idempotency keys.
+
+
+## Pending payment void and retry
+
+Authorized Manager/Owner/Finance can void a pending payment with a mandatory reason:
+- `PATCH /api/payments/:paymentId/void`
+- A successful void changes payment status to `voided`, records the reason in settlement metadata and audit log, and reopens the dining session.
+- A settled payment cannot be voided through this endpoint.
+- After voiding, Manager/Owner may cancel an eligible order item and restore its stock, or cashier may create a replacement payment.
+
+The automated inventory E2E also verifies transfer pending → void → replacement transfer pending → confirmed settlement.
