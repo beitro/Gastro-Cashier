@@ -55,7 +55,7 @@ BEGIN
  ALTER TABLE staff_sessions ENABLE ROW LEVEL SECURITY; ALTER TABLE staff_sessions FORCE ROW LEVEL SECURITY;
  CREATE POLICY staff_session_insert ON staff_sessions FOR INSERT WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid);
  CREATE POLICY staff_session_select_active ON staff_sessions FOR SELECT USING (token_hash=nullif(current_setting('app.session_token_hash',true),'') AND revoked_at IS NULL AND expires_at>now());
- CREATE POLICY staff_session_revoke_own ON staff_sessions FOR UPDATE USING (token_hash=nullif(current_setting('app.session_token_hash',true),'') AND revoked_at IS NULL AND expires_at>now()) WITH CHECK (revoked_at IS NOT NULL);
+ CREATE POLICY staff_session_revoke_own ON staff_sessions FOR UPDATE USING (token_hash=nullif(current_setting('app.session_token_hash',true),'') AND revoked_at IS NULL AND expires_at>now()) WITH CHECK (true);
  ALTER TABLE auth_rate_limits ENABLE ROW LEVEL SECURITY;
  ALTER TABLE auth_rate_limits FORCE ROW LEVEL SECURITY;
  DROP POLICY IF EXISTS auth_rate_limit_private ON auth_rate_limits;
