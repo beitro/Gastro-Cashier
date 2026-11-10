@@ -372,7 +372,7 @@ app.patch('/api/sessions/:sessionId/orders/:itemId', authenticate, requirePosRol
   }
   const updated = await scoped(req, async c => {
     const session = await c.query(
-      "SELECT id FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing')",
+      "SELECT id FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing') FOR UPDATE",
       [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]
     );
     if (!session.rowCount) return null;
