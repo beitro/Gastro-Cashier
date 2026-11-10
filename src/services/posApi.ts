@@ -138,6 +138,7 @@ export async function openApiSession(table: Table, guestCount: number, waiterSta
 export async function submitApiOrder(sessionId: string, items: OrderItem[], menu: ApiRow[]): Promise<ApiRow> {
   const bySku = new Map(menu.filter(row => row.sku).map(row => [String(row.sku), String(row.id)]));
   const payload = items.map(item => {
+    if (item.selectedModifiers?.length) throw new Error('Pilihan modifier belum didukung oleh API transaksi. Hapus modifier sebelum mengirim pesanan.');
     const menuItemId = bySku.get(item.menuItemId);
     if (!menuItemId) throw new Error('SKU menu ' + item.menuItemId + ' tidak ditemukan di katalog API. Pesanan tidak dikirim.');
     return { menuItemId, quantity: item.quantity, notes: item.notes || '' };
