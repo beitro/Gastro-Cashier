@@ -1,6 +1,6 @@
 import express from 'express';
 import pg from 'pg';
-import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -242,8 +242,10 @@ app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=
   const role=req.body?.role,pin=String(req.body?.pin||'');
   if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4}$/.test(pin)||(!email&&!phone)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone))))return res.status(400).json({error:'Nama, kontak (email/telepon), role, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
+  const staffId=randomUUID();
   const created=await adminScoped(req,async c=>{
-    const a=(await c.query('INSERT INTO staff_accounts(email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[email,phone,name,pinHash])).rows[0];
+    await setRlsContext(c,{tenant_id:req.auth.tenant_id,outlet_id:req.auth.outlet_id,actor_staff_id:req.auth.staff_id,role_code:req.auth.role_code,pending_staff_id:staffId,capabilities:['tenant_scope','staff_admin']});
+    const a=(await c.query('INSERT INTO staff_accounts(id,email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4,$5) RETURNING id',[staffId,email,phone,name,pinHash])).rows[0];
     const tm=(await c.query('INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,$3) RETURNING id',[req.auth.tenant_id,a.id,role])).rows[0];
     await c.query('INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,$4)',[req.auth.tenant_id,req.auth.outlet_id,tm.id,role]);
     await writeAdminAudit(c,req,'staff.created',a.id,null,{name,role,status:'active'},{pinConfigured:true,nfcConfigured:false});
