@@ -222,7 +222,7 @@ app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>
 app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null;
   const role=req.body?.role,pin=String(req.body?.pin||'');
-  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)|| (email && (email.length>254||!/^\S+@\S+\\.\S+$/.test(email)))) return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
+  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)|| (email && (email.length>254||!/^\S+@\S+\.\S+$/.test(email)))) return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
   const created=await adminScoped(req,async c=>{
     const a=(await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[email,name,pinHash])).rows[0];
