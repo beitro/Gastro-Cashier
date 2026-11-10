@@ -24,11 +24,12 @@ if (!rlsContextSecret || Buffer.byteLength(rlsContextSecret, 'utf8') < 32) {
 }
 function signRlsContext(claims) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = Buffer.from(JSON.stringify({
+  const payloadBytes = Buffer.from(JSON.stringify({
     v: '1', iat: now, exp: now + 60, jti: randomBytes(16).toString('hex'),
     ...claims
-  }), 'utf8').toString('base64url');
-  const signature = createHmac('sha256', rlsContextSecret).update(payload).digest('base64url');
+  }), 'utf8');
+  const payload = payloadBytes.toString('base64url');
+  const signature = createHmac('sha256', rlsContextSecret).update(payloadBytes).digest('base64url');
   return payload + '.' + signature;
 }
 async function setRlsContext(client, claims) {
