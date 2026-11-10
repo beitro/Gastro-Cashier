@@ -104,9 +104,11 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work postgres:18-alpine \
             pg_restore --list /work/backup/backup-verification.dump > backup/restore-list.txt
           test -s backup/restore-list.txt
-          # Full restore into an isolated disposable PostgreSQL 18 service; never back into Neon.
+          # Restore into a fresh template0 database on an isolated disposable PostgreSQL 18 service.
+          docker run --rm --network host -e PGPASSWORD=restore-only-ci postgres:18-alpine \
+            createdb -h 127.0.0.1 -U restore -T template0 restore_verify
           docker run --rm --network host -v "$PWD:/work" -w /work postgres:18-alpine \
-            pg_restore --exit-on-error --no-owner --no-acl --dbname=postgresql://restore:restore-only-ci@127.0.0.1:5432/restore_target \
+            pg_restore --exit-on-error --no-owner --no-acl --dbname=postgresql://restore:restore-only-ci@127.0.0.1:5432/restore_verify \
             /work/backup/backup-verification.dump
           echo "verified=true" >> "$GITHUB_OUTPUT"
           rm -f backup/neon-pre-migration.dump backup/backup-verification.dump "$RUNNER_TEMP/neon-backup.pass"
@@ -132,7 +134,7 @@ jobs:
           try {
             await c.connect();
             const m=(await c.query("SELECT current_user AS role,current_database() AS db, r.rolsuper,r.rolcreaterole,r.rolbypassrls,r.rolinherit, n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=current_user) AS owns_schema FROM pg_roles r JOIN pg_namespace n ON n.nspname='public' WHERE r.rolname=current_user")).rows[0];
-            if(!m || m.db!==process.env.NEON_EXPECTED_DATABASE || m.rolsuper || !m.rolcreaterole || !m.owns_schema) throw new Error('Admin role must match target, own public schema, have CREATEROLE, and not be superuser/BYPASSRLS/INHERIT.');
+            if(!m || m.db!==process.env.NEON_EXPECTED_DATABASE || m.rolsuper || !m.rolcreaterole || !m.owns_schema) throw new Error('Admin role must match target, own public schema and application relations, have CREATEROLE, and not be superuser.');
             const t=await c.query("SELECT c.relname, pg_get_userbyid(c.relowner)=current_user AS owned FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v')");
             const found=new Set(t.rows.map(x=>x.relname));
             const missing=required.filter(x=>!found.has(x));
