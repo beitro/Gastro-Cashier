@@ -8,7 +8,7 @@ if (process.env.DB_SAFETY_ALLOW_MUTATIONS !== 'YES') throw new Error('Refusing f
 const opts = { connectionString, connectionTimeoutMillis: 10000, statement_timeout: 15000, query_timeout: 20000 };
 const admin = new Client(opts), runtime = new Client(opts), contender = new Client(opts);
 const phase = name => console.log(`[db-safety] ${name}`);
-const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
+const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffCreated:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
 const contextSecret = randomBytes(32);
 function signedContext(claims) {
   const now = Math.floor(Date.now() / 1000);
@@ -175,6 +175,20 @@ try {
   await assertDenied(runtime,"INSERT INTO dining_sessions(tenant_id,outlet_id,table_id,session_number,guest_count,status) VALUES($1,$2,$3,$4,2,'active')",[ids.tenantA,ids.outletOtherA,ids.tableOtherA,`bad-runtime-outlet-${slug}`],'Production runtime cross-outlet write');
   await runtime.query('ROLLBACK');
 
+  phase('verify signed Owner capability and reject signed non-Owner staff administration');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'cashier',capabilities:['tenant_scope','staff_admin']});
+  await assertDenied(runtime,'INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`cashier-forged-${slug}@test.invalid`,'Forged Admin','scrypt$00$00'],'Signed non-Owner staff creation');
+  await runtime.query('ROLLBACK');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',capabilities:['tenant_scope','staff_admin']});
+  await runtime.query('INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00']);
+  const createdMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'cashier') RETURNING id",[ids.tenantA,ids.staffCreated])).rows[0];
+  await runtime.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'cashier')",[ids.tenantA,ids.outletA,createdMembership.id]);
+  await runtime.query('INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id) VALUES($1,$2,$3,$4,$5,$6)',[ids.tenantA,ids.outletA,ids.staffA,'staff.created','staff',ids.staffCreated]);
+  if((await runtime.query('SELECT id FROM staff_accounts WHERE id=$1',[ids.staffCreated])).rowCount!==1) throw new Error('Signed Owner could not create staff.');
+  await runtime.query('ROLLBACK');
+
   phase('verify concurrent open-session uniqueness');
   await contender.connect();
   await admin.query('BEGIN');
@@ -202,7 +216,7 @@ try {
   await admin.query('DELETE FROM staff_sessions WHERE id=$1',[ids.staffSessionA]).catch(()=>{});
   await admin.query('DELETE FROM outlet_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM tenant_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
-  await admin.query('DELETE FROM staff_accounts WHERE id=ANY($1::uuid[])',[[ids.staffA,ids.staffB]]).catch(()=>{});
+  await admin.query('DELETE FROM staff_accounts WHERE id=ANY($1::uuid[])',[[ids.staffA,ids.staffB,ids.staffCreated]]).catch(()=>{});
   await admin.query('DELETE FROM dining_tables WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM outlets WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM tenants WHERE id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
