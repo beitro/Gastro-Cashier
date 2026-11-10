@@ -145,8 +145,7 @@ try {
   await applyContext(runtime,{capabilities:['session_lookup'],session_token_hash:`token-${slug}`});
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==1) throw new Error('Production runtime token lookup failed');
   await assertDenied(runtime,'UPDATE staff_sessions SET staff_id=$1 WHERE token_hash=$2',[ids.staffB,`token-${slug}`],'Runtime session identity mutation');
-  await runtime.query("SELECT set_config('app.auth_lookup','false',true)");
-  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,session_token_hash:`token-${slug}`,capabilities:['tenant_scope','session_revoke_self']});
   await runtime.query('UPDATE staff_sessions SET revoked_at=now() WHERE token_hash=$1',[`token-${slug}`]);
   if((await runtime.query('SELECT id FROM staff_sessions WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()',[`token-${slug}`])).rowCount!==0) throw new Error('Revoked session remained active');
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
