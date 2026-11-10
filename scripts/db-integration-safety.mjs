@@ -8,7 +8,7 @@ if (process.env.DB_SAFETY_ALLOW_MUTATIONS !== 'YES') throw new Error('Refusing f
 const opts = { connectionString, connectionTimeoutMillis: 10000, statement_timeout: 15000, query_timeout: 20000 };
 const admin = new Client(opts), runtime = new Client(opts), contender = new Client(opts);
 const phase = name => console.log(`[db-safety] ${name}`);
-const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffCreated:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
+const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), bootstrapTenant:randomUUID(), bootstrapOutlet:randomUUID(), bootstrapStaff:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffCreated:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
 const contextSecret = randomBytes(32);
 function signedContext(claims) {
   const now = Math.floor(Date.now() / 1000);
@@ -68,6 +68,19 @@ try {
   await admin.query('COMMIT');
 
   await runtime.connect();
+  phase('verify signed one-time bootstrap capability and tenant-scoped follow-up');
+  await runtime.connect();
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await applyContext(runtime,{capabilities:['bootstrap']});
+  await runtime.query('INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3)',[ids.bootstrapTenant,`boot-${slug}`,'Bootstrap test tenant']);
+  await runtime.query('INSERT INTO outlets(id,tenant_id,slug,name) VALUES($1,$2,$3,$4)',[ids.bootstrapOutlet,ids.bootstrapTenant,'main','Bootstrap test outlet']);
+  await applyContext(runtime,{tenant_id:ids.bootstrapTenant,outlet_id:ids.bootstrapOutlet,capabilities:['bootstrap','tenant_scope']});
+  await runtime.query('INSERT INTO tenant_settings(tenant_id) VALUES($1)',[ids.bootstrapTenant]);
+  await runtime.query('INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.bootstrapStaff,`bootstrap-${slug}@test.invalid`,'Bootstrap owner','scrypt$00$00']);
+  const bootstrapMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'owner') RETURNING id",[ids.bootstrapTenant,ids.bootstrapStaff])).rows[0];
+  await runtime.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'owner')",[ids.bootstrapTenant,ids.bootstrapOutlet,bootstrapMembership.id]);
+  await runtime.query('ROLLBACK');
+
   phase('verify caller-set legacy GUCs cannot forge capabilities');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantB,ids.outletB]);
@@ -214,12 +227,13 @@ try {
   await admin.query('DELETE FROM idempotency_keys WHERE tenant_id=$1 AND outlet_id=$2',[ids.tenantA,ids.outletA]).catch(()=>{});
   await admin.query('DELETE FROM dining_sessions WHERE id=ANY($1::uuid[])',[[ids.diningSessionA,ids.diningSessionB]]).catch(()=>{});
   await admin.query('DELETE FROM staff_sessions WHERE id=$1',[ids.staffSessionA]).catch(()=>{});
-  await admin.query('DELETE FROM outlet_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
-  await admin.query('DELETE FROM tenant_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
-  await admin.query('DELETE FROM staff_accounts WHERE id=ANY($1::uuid[])',[[ids.staffA,ids.staffB,ids.staffCreated]]).catch(()=>{});
+  await admin.query('DELETE FROM outlet_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB,ids.bootstrapTenant]]).catch(()=>{});
+  await admin.query('DELETE FROM tenant_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB,ids.bootstrapTenant]]).catch(()=>{});
+  await admin.query('DELETE FROM staff_accounts WHERE id=ANY($1::uuid[])',[[ids.staffA,ids.staffB,ids.staffCreated,ids.bootstrapStaff]]).catch(()=>{});
   await admin.query('DELETE FROM dining_tables WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
-  await admin.query('DELETE FROM outlets WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
-  await admin.query('DELETE FROM tenants WHERE id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
+  await admin.query('DELETE FROM tenant_settings WHERE tenant_id=$1',[ids.bootstrapTenant]).catch(()=>{});
+  await admin.query('DELETE FROM outlets WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB,ids.bootstrapTenant]]).catch(()=>{});
+  await admin.query('DELETE FROM tenants WHERE id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB,ids.bootstrapTenant]]).catch(()=>{});
   if (createdTestRole) {
     await admin.query('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gastro_runtime_test').catch(()=>{});
     await admin.query('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM gastro_runtime_test').catch(()=>{});
