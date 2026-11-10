@@ -19,12 +19,14 @@ try {
     r.rolsuper,r.rolbypassrls,r.rolinherit,r.rolcreatedb,r.rolcreaterole,
     EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m','S') AND x.relowner=r.oid) AS owns_objects,
     EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=r.oid) AS owns_schema,
-    EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships
+    EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships,
+    has_schema_privilege(current_user,'public','CREATE') AS can_create_public_objects,
+    has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schemas
     FROM pg_roles r WHERE r.rolname=current_user`);
   const role=meta.rows[0];
   if (!role || role.current_user !== (process.env.NEON_RUNTIME_DB_ROLE || 'gastro_runtime') ||
       role.rolsuper || role.rolbypassrls || role.rolinherit || role.rolcreatedb || role.rolcreaterole ||
-      role.owns_objects || role.owns_schema || role.has_memberships) fail('connected role is not a safe dedicated runtime role.');
+      role.owns_objects || role.owns_schema || role.has_memberships || role.can_create_public_objects || role.can_create_schemas) fail('connected role is not a safe dedicated runtime role.');
   const audit=await c.query(`SELECT count(*)::int AS total,
     count(*) FILTER (WHERE relrowsecurity AND relforcerowsecurity)::int AS protected
     FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p')`);
