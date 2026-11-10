@@ -32,7 +32,8 @@ function signRlsContext(claims) {
   return payload + '.' + signature;
 }
 async function setRlsContext(client, claims) {
-  await client.query("SELECT set_config('app.context_token',$1,true)", [signRlsContext(claims)]);
+  const tx = await client.query('SELECT txid_current()::text AS txid');
+  await client.query("SELECT set_config('app.context_token',$1,true)", [signRlsContext({ ...claims, txid: tx.rows[0].txid })]);
 }
 const normalizeRole = (role) => role === 'owner' ? 'owner' : role === 'finance' ? 'finance' : role === 'cashier' ? 'cashier' : null;
 function requireOwner(req,res,next) { if (!req.auth || req.auth.role_code !== 'owner') return res.status(403).json({error:'Hanya Owner yang dapat mengelola staff.'}); next(); }
