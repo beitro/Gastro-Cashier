@@ -27,7 +27,7 @@ In repository Settings → Environments, create `neon-production` and configure 
 
 ### 2. Configure GitHub Actions secrets
 
-Add these repository or (preferably) `neon-production` environment secrets. Never commit values or paste them into chat.
+Add these as **repository Actions secrets** (not only Environment secrets), because the first job must create the backup before the production approval gate. Never commit values or paste them into chat.
 
 | Secret | Purpose |
 |---|---|
@@ -43,18 +43,9 @@ The admin connection must own the public schema and all application relations an
 
 ### 3. Run only after review
 
-After PR #7 is merged and the Environment approval gate is verified, open Actions → **Neon production RLS deployment** → Run workflow. Select `DEPLOY` only when intentionally authorizing the deployment. The job then:
+After PR #7 is merged, open Actions → **Neon production RLS deployment** → Run workflow and select `DEPLOY`. The backup job first checks the exact Neon identity, creates an encrypted PostgreSQL custom-format logical backup, verifies it byte-for-byte, checks the archive, fully restores it into an isolated disposable PostgreSQL 18 database, and uploads only the encrypted backup plus checksum as a 30-day artifact. **Only after that job succeeds does the `deploy` job pause at the `neon-production` Environment for required human approval.** After approval it downloads and re-verifies the backup, revalidates the exact target, schema ownership, expected relations and PostgreSQL version, applies only `db/migrations/002_rls_runtime_hardening.sql`, provisions the least-privilege `gastro_runtime` role, and performs read-only RLS checks through the actual runtime login.
 
-1. Checks required secrets and exact Neon host/database identity (read-only).
-2. Creates a PostgreSQL custom-format logical backup.
-3. Encrypts the backup with AES-256, decrypts it to verify byte-for-byte integrity, checks the archive, and fully restores it into an isolated disposable PostgreSQL 18 database.
-4. Uploads only the encrypted backup and checksum as a 30-day Actions artifact.
-5. Revalidates schema ownership, expected tables, PostgreSQL version, and migration prerequisites (read-only).
-6. Applies only `db/migrations/002_rls_runtime_hardening.sql`.
-7. Provisions the least-privilege `gastro_runtime` role.
-8. Builds the runtime connection string in the runner without printing it and runs read-only RLS checks through the actual `gastro_runtime` login.
-
-Every step is fail-fast. Migration cannot start if backup creation, encryption/decryption, archive validation, full restore, artifact upload, or pre-migration checks fail. A failure after migration prevents later steps and must be handled using the verified backup and a reviewed recovery plan; the workflow does not attempt automatic rollback of a production schema migration.
+Every step is fail-fast. Migration cannot start if backup creation, encryption/decryption, archive validation, full restore, artifact upload, approval, backup re-verification, or pre-migration checks fail. A failure after migration prevents later steps and must be handled using the verified backup and a reviewed recovery plan; the workflow does not attempt automatic rollback of a production schema migration.
 
 ### Important operational notes
 
