@@ -7,7 +7,7 @@ const tableCode = String(process.env.POS_E2E_TABLE_CODE || '01');
 if (!baseUrl || !/^\d{4}$/.test(pin)) {
   throw new Error('Set POS_E2E_API_URL and POS_E2E_PIN (4 digits). This test must target the isolated gastro-test-seed preview API.');
 }
-if (/production|gastro-cashier\.vercel\.app/i.test(baseUrl)) {
+if (/production|gastro-cashier\.vercel\.app|gastro-cashier\.vercel\.app/i.test(baseUrl)) {
   throw new Error('Refusing to run POS E2E against a production URL.');
 }
 async function call(path, { token, method = 'GET', body } = {}) {
