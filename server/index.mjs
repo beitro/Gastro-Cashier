@@ -211,18 +211,13 @@ async function adminScoped(req,fn) {
 }
 const ADMIN_ROLES=['owner','cashier','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
-  const rows=await adminScoped(req,c=>c.query(`SELECT a.id,a.display_name,a.email,a.status,tm.role_code,
-    (a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at
-    FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1
-    JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2
-    WHERE (tm.status='active' AND om.status='active') OR a.status<>'active'
-    ORDER BY a.display_name`,[req.auth.tenant_id,req.auth.outlet_id]));
+  const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
 app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null;
   const role=req.body?.role,pin=String(req.body?.pin||'');
-  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)|| (email && (email.length>254||!/^\S+@\S+\.\S+$/.test(email)))) return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
+  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email))))return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
   const created=await adminScoped(req,async c=>{
     const a=(await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[email,name,pinHash])).rows[0];
@@ -234,18 +229,14 @@ app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=
 }));
 app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const role=req.body?.role,status=req.body?.status;
-  if((role!==undefined&&!ADMIN_ROLES.includes(role))||(status!==undefined&&!['active','inactive','blocked'].includes(status))|| (role===undefined&&status===undefined)) return res.status(400).json({error:'Role atau status tidak valid.'});
-  if(req.params.staffId===req.auth.staff_id && status && status!=='active') return res.status(400).json({error:'Owner tidak dapat menonaktifkan akun sendiri.'});
+  if((role!==undefined&&!ADMIN_ROLES.includes(role))||(status!==undefined&&!['active','inactive','blocked'].includes(status))||(role===undefined&&status===undefined))return res.status(400).json({error:'Role atau status tidak valid.'});
+  if(req.params.staffId===req.auth.staff_id&&status&&status!=='active')return res.status(400).json({error:'Owner tidak dapat menonaktifkan akun sendiri.'});
   const result=await adminScoped(req,async c=>{
-    const current=await c.query(`SELECT tm.id,tm.role_code,a.status FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id
-      JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$3
-      WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF tm,a`,[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
+    const current=await c.query('SELECT tm.id,tm.role_code,a.status FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$3 WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF tm,a',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
     if(!current.rowCount)return {status:404,error:'Staff tidak ditemukan di outlet ini.'};
     const old=current.rows[0],nextRole=role||old.role_code,nextStatus=status||old.status;
     if(old.role_code==='owner'&&(nextRole!=='owner'||nextStatus!=='active')){
-      const owners=await c.query(`SELECT count(*)::int AS count FROM tenant_memberships tm JOIN outlet_memberships om
-        ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2
-        WHERE tm.tenant_id=$1 AND tm.role_code='owner' AND tm.status='active'`,[req.auth.tenant_id,req.auth.outlet_id]);
+      const owners=await c.query('SELECT count(*)::int AS count FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE tm.tenant_id=$1 AND tm.role_code=\'owner\' AND tm.status=\'active\'',[req.auth.tenant_id,req.auth.outlet_id]);
       if(owners.rows[0].count<=1)return {status:409,error:'Tidak bisa menurunkan/nonaktifkan satu-satunya Owner aktif di outlet.'};
     }
     if(role!==undefined){await c.query('UPDATE tenant_memberships SET role_code=$1 WHERE id=$2',[role,old.id]);await c.query('UPDATE outlet_memberships SET role_code=$1 WHERE tenant_id=$2 AND outlet_id=$3 AND tenant_membership_id=$4',[role,req.auth.tenant_id,req.auth.outlet_id,old.id]);}
@@ -264,7 +255,17 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
   const result=await adminScoped(req,async c=>{
     const member=await c.query('SELECT tm.id FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id WHERE tm.tenant_id=$1 AND tm.staff_id=$2 AND om.outlet_id=$3',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
     if(!member.rowCount)return false;
-    const sets=[],values=[req.params.staffId];if(pinHash){values.push(pinHash);sets.push('pin_hash=app.get('/api/menu', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+    const sets=[],values=[req.params.staffId];
+    if(pinHash){values.push(pinHash);sets.push('pin_hash=$'+values.length);}
+    if(nfcHash){values.push(nfcHash);sets.push('nfc_credential_hash=$'+values.length);}
+    await c.query('UPDATE staff_accounts SET '+sets.join(',')+' WHERE id=$1',values);
+    await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND outlet_id=$2 AND staff_id=$3 AND revoked_at IS NULL',[req.auth.tenant_id,req.auth.outlet_id,req.params.staffId]);
+    return true;
+  });
+  if(!result)return res.status(404).json({error:'Staff tidak ditemukan di outlet ini.'});
+  res.json({ok:true,credentialsUpdated:true,sessionsRevoked:true});
+}));
+app.get('/api/menu', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT m.id,m.sku,m.name,m.description,m.destination,m.price,m.cost_price,m.image_url,m.category_id,c.name AS category_name
     FROM menu_items m LEFT JOIN menu_categories c ON c.tenant_id=m.tenant_id AND c.id=m.category_id
     WHERE m.tenant_id=$1 AND (m.outlet_id IS NULL OR m.outlet_id=$2) AND m.is_available=true
