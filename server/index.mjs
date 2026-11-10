@@ -332,6 +332,30 @@ app.get('/api/menu', authenticate, requirePosRole, asyncRoute(async (req,res) =>
     ORDER BY c.sort_order NULLS LAST,m.sort_order,m.name`,[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
+app.put('/api/menu/:menuItemId/stock', authenticate, requireManagerOrOwner, asyncRoute(async(req,res)=>{
+  const quantity=req.body?.quantity,trackStock=req.body?.trackStock!==false;
+  if(!Number.isInteger(quantity)||quantity<0||quantity>1000000||typeof req.body?.trackStock!=='boolean') return res.status(400).json({error:'quantity integer 0–1.000.000 dan trackStock boolean wajib valid.'});
+  const result=await scoped(req,async c=>{
+    const menu=await c.query('SELECT id FROM menu_items WHERE tenant_id=$1 AND (outlet_id IS NULL OR outlet_id=$2) AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId]);
+    if(!menu.rowCount) return {status:404,body:{error:'Menu tidak ditemukan di outlet ini.'}};
+    const old=await c.query('SELECT quantity,track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId]);
+    const nextQuantity=trackStock?quantity:0;
+    const priorQuantity=old.rowCount&&old.rows[0].track_stock?Number(old.rows[0].quantity):0;
+    const saved=(await c.query(`INSERT INTO menu_stock(tenant_id,outlet_id,menu_item_id,quantity,track_stock,updated_at,updated_by_staff_id)
+      VALUES($1,$2,$3,$4,$5,now(),$6)
+      ON CONFLICT(tenant_id,outlet_id,menu_item_id) DO UPDATE SET quantity=EXCLUDED.quantity,track_stock=EXCLUDED.track_stock,updated_at=now(),updated_by_staff_id=EXCLUDED.updated_by_staff_id
+      RETURNING *`,[req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId,nextQuantity,trackStock,req.auth.staff_id])).rows[0];
+    const delta=nextQuantity-priorQuantity;
+    if(delta!==0) await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
+      VALUES($1,$2,$3,$4,$5,'stock_adjustment',$6,$7,$8)`,
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId,old.rowCount?'adjustment':'opening',delta,randomUUID(),req.body?.note?String(req.body.note).slice(0,500):'Manager stock adjustment',req.auth.staff_id]);
+    await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'menu_stock.adjusted','menu_stock',$4,$5::jsonb)",
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.menuItemId,JSON.stringify({quantity:saved.quantity,trackStock:saved.track_stock,delta})]);
+    return {status:200,body:saved};
+  });
+  res.status(result.status).json(result.body);
+}));
+
 app.get('/api/sessions', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT s.*,t.table_code,t.display_name AS table_name
     FROM dining_sessions s JOIN dining_tables t ON t.tenant_id=s.tenant_id AND t.outlet_id=s.outlet_id AND t.id=s.table_id
