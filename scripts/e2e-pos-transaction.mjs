@@ -34,8 +34,8 @@ const [tables, menu] = await Promise.all([
 ]);
 const table = tables.find(row => row.table_code === tableCode && row.table_state === 'available');
 assert.ok(table?.table_id, 'An available fixture table must exist');
-const menuItem = menu.find(row => row.sku === 'food-1');
-assert.ok(menuItem?.id, 'Fixture menu SKU food-1 must exist');
+const menuItem = menu.find(row => row.sku === 'food-4');
+assert.ok(menuItem?.id, 'Fixture menu SKU food-4 must exist');
 
 const session = await call('/api/sessions', {
   token, method: 'POST', body: { tableId: table.table_id, guestCount: 1 },
