@@ -302,6 +302,7 @@ CREATE POLICY staff_admin_insert ON public.staff_accounts FOR INSERT
   WITH CHECK (
     app_private.rls_context()->'capabilities' ? 'staff_admin'
     AND app_private.rls_context()->>'role_code' = 'owner'
+    AND staff_accounts.id = NULLIF(app_private.rls_context()->>'pending_staff_id','')::UUID
     AND EXISTS (
       SELECT 1 FROM public.tenant_memberships actor_tm
       WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
