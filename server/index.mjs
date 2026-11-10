@@ -209,6 +209,10 @@ async function adminScoped(req,fn) {
     return fn(c);
   });
 }
+async function writeAdminAudit(c,req,action,staffId,beforeData,afterData,metadata={}) {
+  await c.query('INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,ip_address,user_agent,before_data,after_data,metadata) VALUES($1,$2,$3,$4,\'staff\',$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb)',
+    [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,action,staffId,req.ip||null,req.get('user-agent')||null,JSON.stringify(beforeData),JSON.stringify(afterData),JSON.stringify(metadata)]);
+}
 const ADMIN_ROLES=['owner','cashier','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
@@ -223,6 +227,7 @@ app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=
     const a=(await c.query('INSERT INTO staff_accounts(email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[email,phone,name,pinHash])).rows[0];
     const tm=(await c.query('INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,$3) RETURNING id',[req.auth.tenant_id,a.id,role])).rows[0];
     await c.query('INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,$4)',[req.auth.tenant_id,req.auth.outlet_id,tm.id,role]);
+    await writeAdminAudit(c,req,'staff.created',a.id,null,{name,role,status:'active'},{pinConfigured:true,nfcConfigured:false});
     return {id:a.id};
   });
   res.status(201).json({ok:true,...created});
@@ -244,6 +249,7 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
     }
     if(role!==undefined){await c.query('UPDATE tenant_memberships SET role_code=$1 WHERE id=$2',[role,old.id]);await c.query('UPDATE outlet_memberships SET role_code=$1 WHERE tenant_id=$2 AND outlet_id=$3 AND tenant_membership_id=$4',[role,req.auth.tenant_id,req.auth.outlet_id,old.id]);}
     if(status!==undefined){await c.query('UPDATE staff_accounts SET status=$1 WHERE id=$2',[status,req.params.staffId]);await c.query('UPDATE tenant_memberships SET status=$1 WHERE id=$2',[status,old.id]);if(status!=='active')await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);}
+    await writeAdminAudit(c,req,'staff.updated',req.params.staffId,{role:old.role_code,status:old.status},{role:nextRole,status:nextStatus});
     return {status:200};
   });
   if(result.status!==200)return res.status(result.status).json({error:result.error});
@@ -266,6 +272,7 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
     if(clearNfc)sets.push('nfc_credential_hash=NULL');
     await c.query('UPDATE staff_accounts SET '+sets.join(',')+' WHERE id=$1',values);
     await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);
+    await writeAdminAudit(c,req,'staff.credentials_updated',req.params.staffId,null,null,{pinChanged:!!pinHash,nfcChanged:!!nfcHash,nfcRevoked:clearNfc,sessionsRevoked:true});
     return true;
   });
   if(result==='multi')return res.status(409).json({error:'Akun ini terhubung ke beberapa tenant; reset credential global harus melalui administrasi pusat.'});
