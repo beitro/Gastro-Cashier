@@ -199,6 +199,10 @@ try {
   await runtime.query('INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00']);
   const createdMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'cashier') RETURNING id",[ids.tenantA,ids.staffCreated])).rows[0];
   await runtime.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'cashier')",[ids.tenantA,ids.outletA,createdMembership.id]);
+  await runtime.query("UPDATE tenant_memberships SET role_code='finance' WHERE id=$1",[createdMembership.id]);
+  await runtime.query("UPDATE outlet_memberships SET role_code='finance' WHERE tenant_membership_id=$1 AND outlet_id=$2",[createdMembership.id,ids.outletA]);
+  await runtime.query("UPDATE staff_accounts SET phone=$1 WHERE id=$2",[`+62812${slug.slice(0,8)}`,ids.staffCreated]);
+  await runtime.query('UPDATE staff_sessions SET revoked_at=now() WHERE id=$1',[ids.staffSessionA]);
   await runtime.query('INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id) VALUES($1,$2,$3,$4,$5,$6)',[ids.tenantA,ids.outletA,ids.staffA,'staff.created','staff',ids.staffCreated]);
   if((await runtime.query('SELECT id FROM staff_accounts WHERE id=$1',[ids.staffCreated])).rowCount!==1) throw new Error('Signed Owner could not create staff.');
   await runtime.query('ROLLBACK');
