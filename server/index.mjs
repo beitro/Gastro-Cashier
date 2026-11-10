@@ -211,13 +211,13 @@ async function adminScoped(req,fn) {
 }
 const ADMIN_ROLES=['owner','cashier','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
-  const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
+  const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
 app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null,phone=req.body?.phone?String(req.body.phone).trim():null;
   const role=req.body?.role,pin=String(req.body?.pin||'');
-  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email))))return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
+  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)||(!email&&!phone)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone))))return res.status(400).json({error:'Nama, kontak (email/telepon), role, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
   const created=await adminScoped(req,async c=>{
     const a=(await c.query('INSERT INTO staff_accounts(email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[email,phone,name,pinHash])).rows[0];
