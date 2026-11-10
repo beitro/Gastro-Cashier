@@ -15,7 +15,8 @@ function signedContext(claims) {
   return payload+'.'+createHmac('sha256',contextSecret).update(payload).digest('base64url');
 }
 async function applyContext(client,claims) {
-  await client.query("SELECT set_config('app.context_token',$1,true)",[signedContext(claims)]);
+  const tx=await client.query('SELECT txid_current()::text AS txid');
+  await client.query("SELECT set_config('app.context_token',$1,true)",[signedContext({...claims,txid:tx.rows[0].txid})]);
 }
 for (const [name, value] of [['NEON_RLS_TEST_TENANT_ID', tenantId], ['NEON_RLS_TEST_OUTLET_ID', outletId]]) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new Error(name + ' must be a UUID.');
