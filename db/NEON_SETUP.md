@@ -91,3 +91,8 @@ The current POS stock model is **per menu item**, not ingredient/recipe consumpt
 - Runtime grants for stock reads/adjustments, stock ledger inserts, order batch cancellation, payment confirmation and order idempotency.
 
 Apply migration 006 only after migrations 001–005 on the isolated development branch and after the database-safety CI passes. Do not add it to the production deployment workflow without a separate reviewed backup/deployment plan. No live payment provider is integrated: non-cash payment settlement is confirmed through the protected API after a Manager/Owner/Finance verifies the provider reference.
+
+
+### Pending payment void and retry
+
+The API supports authorized void of a pending payment using `PATCH /api/payments/:paymentId/void`. A void requires a reason, records an audit event, and reopens the dining session. Settled payments cannot be voided through this route. The Bruno collection includes the void request. The application must not treat a voided or pending payment as revenue.
