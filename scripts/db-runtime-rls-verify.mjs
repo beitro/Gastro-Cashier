@@ -17,7 +17,7 @@ try {
   await c.connect();
   const meta = await c.query(`SELECT current_user, current_database(), current_setting('server_version') AS version,
     r.rolsuper,r.rolbypassrls,r.rolinherit,r.rolcreatedb,r.rolcreaterole,
-    EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m') AND x.relowner=r.oid) AS owns_objects,
+    EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m','S') AND x.relowner=r.oid) AS owns_objects,
     EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=r.oid) AS owns_schema,
     EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships
     FROM pg_roles r WHERE r.rolname=current_user`);
