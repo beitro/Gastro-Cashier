@@ -8,7 +8,7 @@ if (process.env.DB_SAFETY_ALLOW_MUTATIONS !== 'YES') throw new Error('Refusing f
 const opts = { connectionString, connectionTimeoutMillis: 10000, statement_timeout: 15000, query_timeout: 20000 };
 const admin = new Client(opts), runtime = new Client(opts), contender = new Client(opts);
 const phase = name => console.log(`[db-safety] ${name}`);
-const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), bootstrapTenant:randomUUID(), bootstrapOutlet:randomUUID(), bootstrapStaff:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffCreated:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
+const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), bootstrapTenant:randomUUID(), bootstrapOutlet:randomUUID(), bootstrapStaff:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffCreated:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID(), menuItem:randomUUID() };
 const contextSecret = randomBytes(32);
 function signedContext(claims) {
   const now = Math.floor(Date.now() / 1000);
@@ -253,12 +253,36 @@ try {
   try { await admin.query('INSERT INTO idempotency_keys(tenant_id,outlet_id,key,operation) VALUES($1,$2,$3,$4)',[ids.tenantA,ids.outletA,`idem-${slug}`,'safety-test']); } catch(error) { duplicateKeyDenied=error.code==='23505'; }
   if(!duplicateKeyDenied) throw new Error('Duplicate idempotency key was accepted');
 
+  phase('verify atomic menu stock deduction under concurrent cashiers');
+  await admin.query("INSERT INTO menu_items(id,tenant_id,outlet_id,sku,name,destination,price) VALUES($1,$2,$3,$4,$5,'kitchen',10000)",[ids.menuItem,ids.tenantA,ids.outletA,`stock-${slug}`,'Concurrency fixture menu']);
+  await admin.query('INSERT INTO menu_stock(tenant_id,outlet_id,menu_item_id,quantity,track_stock) VALUES($1,$2,$3,1,true)',[ids.tenantA,ids.outletA,ids.menuItem]);
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
+  const firstDeduction=await runtime.query('UPDATE menu_stock SET quantity=quantity-1 WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 AND track_stock=true AND quantity>=1 RETURNING quantity',[ids.tenantA,ids.outletA,ids.menuItem]);
+  if(firstDeduction.rowCount!==1) throw new Error('First cashier could not reserve the only menu stock unit.');
+  await runtime.query("INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,movement_type,quantity_delta,reference_type,reference_id) VALUES($1,$2,$3,'sale',-1,'concurrency-test',$4)",[ids.tenantA,ids.outletA,ids.menuItem,ids.diningSessionA]);
+  await contender.query('BEGIN'); await contender.query('SET LOCAL ROLE gastro_runtime_test');
+  await applyContext(contender,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
+  const secondAttempt=contender.query('UPDATE menu_stock SET quantity=quantity-1 WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 AND track_stock=true AND quantity>=1 RETURNING quantity',[ids.tenantA,ids.outletA,ids.menuItem]);
+  await new Promise(resolve=>setTimeout(resolve,150));
+  await runtime.query('COMMIT');
+  const secondDeduction=await secondAttempt;
+  await contender.query('COMMIT');
+  const stockFinal=await admin.query('SELECT quantity FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3',[ids.tenantA,ids.outletA,ids.menuItem]);
+  const stockLedger=await admin.query("SELECT count(*)::int AS n,COALESCE(sum(quantity_delta),0)::int AS delta FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 AND movement_type='sale'",[ids.tenantA,ids.outletA,ids.menuItem]);
+  if(secondDeduction.rowCount!==0 || Number(stockFinal.rows[0].quantity)!==0 || stockLedger.rows[0].n!==1 || stockLedger.rows[0].delta!==-1) {
+    throw new Error('Concurrent stock deduction invariant failed: '+JSON.stringify({first: firstDeduction.rowCount,second:secondDeduction.rowCount,final:stockFinal.rows[0].quantity,ledger:stockLedger.rows[0]}));
+  }
+
   phase('all RLS assertions passed');
   console.log(JSON.stringify({tests:'passed',rls:{allTablesForceRls:true,noContextDenied:true,explicitAuthLookup:true,tokenScopedSessions:true,tenantIsolation:true,outletIsolation:true,crossTenantWriteDenied:true,crossOutletWriteDenied:true,viewSecurityInvoker:true,staffScope:true}, concurrency:{oneOpenSessionPerTable:duplicateSessionDenied}, idempotency:{duplicateKeyRejected:duplicateKeyDenied}},null,2));
 } finally {
   await runtime.query('ROLLBACK').catch(()=>{});
   await admin.query('ROLLBACK').catch(()=>{});
   await admin.query('DELETE FROM idempotency_keys WHERE tenant_id=$1 AND outlet_id=$2',[ids.tenantA,ids.outletA]).catch(()=>{});
+  await admin.query('DELETE FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3',[ids.tenantA,ids.outletA,ids.menuItem]).catch(()=>{});
+  await admin.query('DELETE FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3',[ids.tenantA,ids.outletA,ids.menuItem]).catch(()=>{});
+  await admin.query('DELETE FROM menu_items WHERE id=$1',[ids.menuItem]).catch(()=>{});
   await admin.query('DELETE FROM dining_sessions WHERE id=ANY($1::uuid[])',[[ids.diningSessionA,ids.diningSessionB]]).catch(()=>{});
   await admin.query('DELETE FROM staff_sessions WHERE id=$1',[ids.staffSessionA]).catch(()=>{});
   await admin.query('DELETE FROM outlet_memberships WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB,ids.bootstrapTenant]]).catch(()=>{});
