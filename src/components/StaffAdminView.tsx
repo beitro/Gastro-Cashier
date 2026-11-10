@@ -61,7 +61,7 @@ export const StaffAdminView: React.FC<{ currentStaff:StaffAccount; onLockScreen:
   const saveCredentials=async(clearNfc=false)=>{
     if(!selected)return;
     setSaving(true);setError('');setNotice('');
-    try{const r=await fetch(API+'/'+selected.id+'/credentials',{method:'POST',headers:authHeaders(),body:JSON.stringify({pin:newPin||undefined,nfcUid:clearNfc?undefined:(nfcUid||undefined),clearNfc})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal memperbarui credential.');setNewPin('');setNfcUid('');setNotice('Credential diperbarui. Sesi aktif staff pada tenant ini telah dicabut.');await load();}
+    try{const r=await fetch(API+'/'+selected.id+'/credentials',{method:'POST',headers:authHeaders(),body:JSON.stringify({pin:newPin||undefined,nfcUid:clearNfc?undefined:(nfcUid||undefined),clearNfc})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal memperbarui credential.');setNewPin('');setNfcUid('');if(clearNfc)setSelected(null);setNotice('Credential diperbarui. Sesi aktif staff pada tenant ini telah dicabut.');await load();}
     catch(e){setError(e instanceof Error?e.message:'Gagal memperbarui credential.');}finally{setSaving(false);}
   };
   const scanNfc=async()=>{
