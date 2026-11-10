@@ -197,9 +197,18 @@ jobs:
               EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships
               FROM pg_roles r WHERE r.rolname='gastro_runtime'`);
             if(existingRole.rowCount && (existingRole.rows[0].rolsuper || existingRole.rows[0].owns_objects || existingRole.rows[0].owns_schema || existingRole.rows[0].has_memberships)) throw new Error('Existing gastro_runtime role has privileged attributes, ownership, or memberships; manual remediation is required before migration.');
+            for (const [name,value] of [['NEON_RLS_TEST_TENANT_ID',process.env.NEON_RLS_TEST_TENANT_ID],['NEON_RLS_TEST_OUTLET_ID',process.env.NEON_RLS_TEST_OUTLET_ID]]) {
+              if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || '')) throw new Error(name+' must be a UUID before migration.');
+            }
+            await c.query('BEGIN READ ONLY');
+            try {
+              await c.query("SELECT set_config('app.bootstrap_mode','true',true)");
+              const fixture=await c.query("SELECT 1 FROM tenants t JOIN outlets o ON o.tenant_id=t.id WHERE t.id=$1::uuid AND o.id=$2::uuid AND t.status='active' AND o.status='active' AND EXISTS (SELECT 1 FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=t.id WHERE a.status='active' AND tm.status='active')",[process.env.NEON_RLS_TEST_TENANT_ID,process.env.NEON_RLS_TEST_OUTLET_ID]);
+              if (fixture.rowCount !== 1) throw new Error('Configured RLS test tenant/outlet must exist, be active, and have active staff before migration.');
+            } finally { await c.query('ROLLBACK'); }
             const version=await c.query("SELECT current_setting('server_version_num')::int AS n");
             if(version.rows[0].n<150000) throw new Error('PostgreSQL 15+ required.');
-            console.log(JSON.stringify({prerequisites:'passed',database:m.db,adminRole:m.role,requiredRelations:required.length,serverVersionNumber:version.rows[0].n}));
+            console.log(JSON.stringify({prerequisites:'passed',database:m.db,adminRole:m.role,requiredRelations:required.length,rlsFixture:'verified-before-migration',serverVersionNumber:version.rows[0].n}));
           } finally { await c.end(); }
           NODE
       - name: Apply incremental RLS hardening migration 002
