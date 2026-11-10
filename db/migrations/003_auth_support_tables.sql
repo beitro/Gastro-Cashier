@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS public.auth_rate_limits (
 CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_updated
   ON public.auth_rate_limits(updated_at);
 
+ALTER TABLE public.staff_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.staff_accounts FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.staff_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.staff_sessions FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.auth_rate_limits ENABLE ROW LEVEL SECURITY;
