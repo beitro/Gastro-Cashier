@@ -114,7 +114,8 @@ END $$;
 -- Tenant/outlet tables.
 CREATE POLICY tenant_self_scope ON public.tenants FOR SELECT
   USING (
-    id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+    (app_private.rls_context()->'capabilities' ? 'tenant_scope'
+      AND id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID)
     OR app_private.rls_context()->'capabilities' ? 'auth_lookup'
     OR app_private.rls_context()->'capabilities' ? 'bootstrap'
   );
@@ -123,7 +124,8 @@ CREATE POLICY tenant_bootstrap_insert ON public.tenants FOR INSERT
 
 CREATE POLICY outlet_tenant_or_auth_lookup ON public.outlets FOR SELECT
   USING (
-    tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+    (app_private.rls_context()->'capabilities' ? 'tenant_scope'
+      AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID)
     OR app_private.rls_context()->'capabilities' ? 'auth_lookup'
     OR app_private.rls_context()->'capabilities' ? 'bootstrap'
   );
@@ -179,7 +181,8 @@ CREATE POLICY outlet_membership_scope_or_auth_lookup ON public.outlet_membership
     app_private.rls_context()->'capabilities' ? 'auth_lookup'
     OR app_private.rls_context()->'capabilities' ? 'bootstrap'
     OR (
-      tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+      app_private.rls_context()->'capabilities' ? 'tenant_scope'
+      AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
       AND outlet_id = NULLIF(app_private.rls_context()->>'outlet_id','')::UUID
     )
   );
@@ -236,7 +239,8 @@ BEGIN
   ] LOOP
     EXECUTE format(
       'CREATE POLICY tenant_outlet_isolation ON public.%I USING (
-        tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
+        app_private.rls_context()->'capabilities' ? 'tenant_scope'
+        AND tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
         AND (outlet_id IS NULL OR outlet_id = NULLIF(app_private.rls_context()->>''outlet_id'','''')::UUID)
       ) WITH CHECK (
         tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
@@ -247,9 +251,11 @@ BEGIN
   FOREACH tbl IN ARRAY ARRAY['tenant_settings','menu_categories','modifier_groups','modifier_options','recipe_lines'] LOOP
     EXECUTE format(
       'CREATE POLICY tenant_isolation ON public.%I USING (
-        tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
+        app_private.rls_context()->'capabilities' ? 'tenant_scope'
+        AND tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
       ) WITH CHECK (
-        tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
+        app_private.rls_context()->'capabilities' ? 'tenant_scope'
+        AND tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
       )', tbl
     );
   END LOOP;
@@ -260,10 +266,13 @@ CREATE POLICY staff_auth_or_tenant_scope ON public.staff_accounts FOR SELECT
   USING (
     app_private.rls_context()->'capabilities' ? 'auth_lookup'
     OR app_private.rls_context()->'capabilities' ? 'bootstrap'
-    OR EXISTS (
+    OR (
+      app_private.rls_context()->'capabilities' ? 'tenant_scope'
+      AND EXISTS (
       SELECT 1 FROM public.tenant_memberships tm
       WHERE tm.staff_id = staff_accounts.id
         AND tm.tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+      )
     )
   );
 CREATE POLICY staff_bootstrap_insert ON public.staff_accounts FOR INSERT
@@ -311,6 +320,7 @@ CREATE POLICY staff_session_insert ON public.staff_sessions FOR INSERT
 CREATE POLICY staff_session_select_own ON public.staff_sessions FOR SELECT
   USING (
     token_hash = app_private.rls_context()->>'session_token_hash'
+    AND app_private.rls_context()->'capabilities' ? 'session_lookup'
     OR (
       app_private.rls_context()->'capabilities' ? 'staff_admin'
       AND app_private.rls_context()->>'role_code' = 'owner'
