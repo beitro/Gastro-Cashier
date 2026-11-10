@@ -278,15 +278,20 @@ CREATE POLICY staff_auth_or_tenant_scope ON public.staff_accounts FOR SELECT
     OR app_private.rls_context()->'capabilities' ? 'bootstrap'
     OR (
       app_private.rls_context()->'capabilities' ? 'tenant_scope'
+      AND NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
+          = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
       AND EXISTS (
         SELECT 1 FROM public.tenant_memberships tm
         WHERE tm.staff_id = staff_accounts.id
+          AND tm.tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
           AND tm.tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
       )
     )
     OR (
       app_private.rls_context()->'capabilities' ? 'staff_admin'
       AND app_private.rls_context()->>'role_code' = 'owner'
+      AND NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
+          = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
       AND staff_accounts.id = NULLIF(app_private.rls_context()->>'pending_staff_id','')::UUID
       AND EXISTS (
         SELECT 1 FROM public.tenant_memberships actor_tm
