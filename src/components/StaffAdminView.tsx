@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Users, ShieldCheck, UserPlus, KeyRound, Radio, RefreshCw, Save, UserX, UserCheck, AlertTriangle } from 'lucide-react';
+import { Users, ShieldCheck, UserPlus, Radio, RefreshCw, Save, UserX, UserCheck, AlertTriangle } from 'lucide-react';
 import { StaffAccount } from '../types/pos';
 
 type AdminStaff = { id:string; display_name:string; email:string|null; role_code:string; status:string; has_pin:boolean; has_nfc:boolean; created_at:string };
@@ -60,7 +60,7 @@ export const StaffAdminView: React.FC<{ currentStaff:StaffAccount; onLockScreen:
   const saveCredentials=async()=>{
     if(!selected)return;
     setSaving(true);setError('');setNotice('');
-    try{const r=await fetch(API+'/'+selected.id+'/credentials',{method:'POST',headers:authHeaders(),body:JSON.stringify({pin:newPin||undefined,nfcUid:nfcUid||undefined})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal memperbarui credential.');setNewPin('');setNfcUid('');setNotice('Credential diperbarui. Secret tidak dikembalikan oleh server.');await load();}
+    try{const r=await fetch(API+'/'+selected.id+'/credentials',{method:'POST',headers:authHeaders(),body:JSON.stringify({pin:newPin||undefined,nfcUid:nfcUid||undefined})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal memperbarui credential.');setNewPin('');setNfcUid('');setNotice('Credential diperbarui. Sesi aktif pada outlet ini telah dicabut.');await load();}
     catch(e){setError(e instanceof Error?e.message:'Gagal memperbarui credential.');}finally{setSaving(false);}
   };
   const scanNfc=async()=>{
@@ -102,7 +102,7 @@ export const StaffAdminView: React.FC<{ currentStaff:StaffAccount; onLockScreen:
           <div className="text-xs font-bold">Status akun<div className="mt-2 flex gap-2"><button disabled={saving||selected.id===currentStaff.id} onClick={()=>void patchStaff(selected.id,{status:'active'})} className="clay-btn-emerald text-white p-2 rounded-lg text-xs"><UserCheck className="inline w-4 h-4 mr-1"/>Aktifkan</button><button disabled={saving||selected.id===currentStaff.id} onClick={()=>void patchStaff(selected.id,{status:'inactive'})} className="clay-btn-neutral p-2 rounded-lg text-xs text-rose-700"><UserX className="inline w-4 h-4 mr-1"/>Nonaktifkan</button></div></div>
           <div className="text-xs font-bold">Reset / daftarkan credential<label className="block mt-2">PIN baru<input value={newPin} onChange={e=>setNewPin(e.target.value.replace(/\D/g,'').slice(0,8))} placeholder="4–8 digit" className="mt-1 w-full clay-well p-2 rounded-lg font-mono" inputMode="numeric"/></label><label className="block mt-2">NFC UID<input value={nfcUid} onChange={e=>setNfcUid(e.target.value)} placeholder="Tap kartu atau masukkan UID" className="mt-1 w-full clay-well p-2 rounded-lg"/></label><div className="flex gap-2 mt-2"><button onClick={()=>void scanNfc()} className="clay-btn-neutral px-3 py-2 rounded-lg text-xs"><Radio className="inline w-3.5 h-3.5 mr-1"/>Scan NFC</button><button disabled={saving||(!newPin&&!nfcUid)} onClick={()=>void saveCredentials()} className="clay-btn-emerald text-white px-3 py-2 rounded-lg text-xs"><Save className="inline w-3.5 h-3.5 mr-1"/>Simpan</button></div>{scanState&&<p className="mt-1 text-[11px] text-emerald-700">{scanState}</p>}</div>
         </div>
-        <p className="text-[11px] text-amber-800 bg-amber-50 rounded-lg p-3">PIN/NFC lama tidak pernah ditampilkan. Reset PIN akan mengganti hash; penggantian credential juga mencabut seluruh sesi staff tersebut.</p>
+        <p className="text-[11px] text-amber-800 bg-amber-50 rounded-lg p-3">PIN/NFC lama tidak pernah ditampilkan. Reset PIN akan mengganti hash; penggantian credential juga mencabut sesi staff pada outlet aktif.</p>
       </section>}
     </div>:<section className="clay-panel p-4 overflow-x-auto"><h3 className="font-black text-slate-900 mb-1">Matrix Hak Akses</h3><p className="text-xs text-slate-500 mb-4">Role merupakan izin maksimum. API tetap memvalidasi hak akses di server; menyembunyikan menu bukan kontrol keamanan.</p><table className="w-full text-sm"><thead><tr className="text-left text-xs uppercase text-slate-500 border-b"><th className="p-3">Fitur</th><th className="p-3">Owner</th><th className="p-3">Cashier</th><th className="p-3">Finance</th></tr></thead><tbody>{matrix.map(row=><tr key={row[0]} className="border-b border-slate-100"><td className="p-3 font-semibold">{row[0]}</td>{row.slice(1).map((v,i)=><td key={i} className={`p-3 font-black ${v==='✓'?'text-emerald-700':'text-slate-300'}`}>{v}</td>)}</tr>)}</tbody></table><div className="mt-4 grid md:grid-cols-3 gap-3">{roles.map(r=><div key={r.code} className="clay-card rounded-xl p-3"><b className="text-sm">{r.label}</b><p className="text-xs text-slate-600 mt-1">{r.description}</p></div>)}</div></section>}
   </div>;
