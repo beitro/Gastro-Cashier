@@ -67,12 +67,20 @@ for(let i=0;i<extraSessions.length;i++){
   const service=Number((line*Number(session.service_charge_rate||0)).toFixed(2));
   const tax=Number(((line+service)*Number(session.tax_rate||0)).toFixed(2));
   const total=Number((line+service+tax).toFixed(2));
-  const method=methods[i],paymentKey=unique('settlement-'+method);
-  const payment=await ok('/api/sessions/'+encodeURIComponent(session.id)+'/payments',{token,method:'POST',body:{method,discountAmount:0,cashReceived:method==='cash'?total:undefined,idempotencyKey:paymentKey}});
+  const method=methods[i];
+  let paymentKey=unique('settlement-'+method);
+  let payment=await ok('/api/sessions/'+encodeURIComponent(session.id)+'/payments',{token,method:'POST',body:{method,discountAmount:0,cashReceived:method==='cash'?total:undefined,idempotencyKey:paymentKey}});
   if(method==='cash') assert.equal(payment.status,'settled','Cash must settle immediately');
   else {
     assert.equal(payment.status,'pending',method+' must remain pending until proof is confirmed');
     assert.equal(payment.paid_at,null,'Pending non-cash payment must not have paid_at');
+    if(method==='transfer') {
+      const voided=await ok('/api/payments/'+encodeURIComponent(payment.id)+'/void',{token,method:'PATCH',body:{reason:'E2E verifies pending payment can be safely voided'}});
+      assert.equal(voided.payment.status,'voided','Pending payment must be voidable by an authorized approver');
+      paymentKey=unique('settlement-transfer-retry');
+      payment=await ok('/api/sessions/'+encodeURIComponent(session.id)+'/payments',{token,method:'POST',body:{method,discountAmount:0,idempotencyKey:paymentKey}});
+      assert.equal(payment.status,'pending','Session must reopen after void so a replacement payment can be initiated');
+    }
     const settled=await ok('/api/payments/'+encodeURIComponent(payment.id)+'/settle',{token,method:'PATCH',body:{providerReference:'E2E-'+method.toUpperCase()+'-'+randomUUID(),note:'Simulated manual confirmation; no live provider integration'}});
     assert.equal(settled.status,'settled');
   }
