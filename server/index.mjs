@@ -11,6 +11,9 @@ const { Pool } = pg;
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '256kb' }));
+const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 10.');
+if (trustProxyHops > 0) app.set('trust proxy', trustProxyHops);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined, max: Number(process.env.PGPOOL_MAX || 10), connectionTimeoutMillis: 5000 });
 const bootstrapPool = process.env.BOOTSTRAP_DATABASE_URL ? new Pool({ connectionString: process.env.BOOTSTRAP_DATABASE_URL, ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined, max: 2, connectionTimeoutMillis: 5000 }) : null;
 const scrypt = promisify(scryptCallback);
@@ -36,6 +39,38 @@ async function transaction(fn, dbPool = pool) {
   finally { client.release(); }
 }
 function asyncRoute(fn) { return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next); }
+const AUTH_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 5;
+const AUTH_BLOCK_MS = 30 * 1000;
+function authScopeHash(req) { return sha256(String(req.ip || req.socket?.remoteAddress || 'unknown')); }
+async function consumeAuthAttempt(req) {
+  const scopeHash = authScopeHash(req);
+  return transaction(async c => {
+    await c.query("SELECT set_config('app.auth_rate_limit','true',true)");
+    await c.query('INSERT INTO auth_rate_limits(scope_hash) VALUES($1) ON CONFLICT(scope_hash) DO NOTHING', [scopeHash]);
+    const result = await c.query('SELECT failed_attempts,window_started_at,blocked_until FROM auth_rate_limits WHERE scope_hash=$1 FOR UPDATE', [scopeHash]);
+    const row = result.rows[0], now = Date.now();
+    const blockedUntil = row.blocked_until ? new Date(row.blocked_until).getTime() : 0;
+    if (blockedUntil > now) return Math.max(1, Math.ceil((blockedUntil - now) / 1000));
+    const windowExpired = now - new Date(row.window_started_at).getTime() >= AUTH_WINDOW_MS;
+    if (windowExpired || blockedUntil) {
+      await c.query('UPDATE auth_rate_limits SET failed_attempts=1,window_started_at=now(),blocked_until=NULL,updated_at=now() WHERE scope_hash=$1', [scopeHash]);
+      return 0;
+    }
+    if (row.failed_attempts >= AUTH_MAX_ATTEMPTS) {
+      const blocked = await c.query("UPDATE auth_rate_limits SET blocked_until=now()+interval '30 seconds',updated_at=now() WHERE scope_hash=$1 RETURNING blocked_until", [scopeHash]);
+      return Math.max(1, Math.ceil((new Date(blocked.rows[0].blocked_until).getTime() - now) / 1000));
+    }
+    await c.query('UPDATE auth_rate_limits SET failed_attempts=failed_attempts+1,updated_at=now() WHERE scope_hash=$1', [scopeHash]);
+    return 0;
+  });
+}
+async function clearAuthAttempts(req) {
+  await transaction(async c => {
+    await c.query("SELECT set_config('app.auth_rate_limit','true',true)");
+    await c.query('UPDATE auth_rate_limits SET failed_attempts=0,window_started_at=now(),blocked_until=NULL,updated_at=now() WHERE scope_hash=$1', [authScopeHash(req)]);
+  });
+}
 
 app.get('/api/health', asyncRoute(async (_req, res) => {
   const r = await pool.query('SELECT current_setting($1) AS version', ['server_version']);
@@ -51,7 +86,9 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
   const pinHash = await hashCredential(pin);
   const nfcHash = nfcUid ? await hashCredential(String(nfcUid).trim().toUpperCase()) : null;
   const created = await transaction(async c => {
+    await c.query("SELECT pg_advisory_xact_lock(hashtext('gastro_cashier_one_time_bootstrap'))");
     await c.query("SELECT set_config('app.bootstrap_mode','true',true)");
+    if ((await c.query('SELECT 1 FROM tenants LIMIT 1')).rowCount) return { alreadyBootstrapped: true };
     const t = (await c.query('INSERT INTO tenants(slug,name) VALUES($1,$2) RETURNING id', [tenantSlug,tenantName])).rows[0];
     const o = (await c.query('INSERT INTO outlets(tenant_id,slug,name) VALUES($1,$2,$3) RETURNING id', [t.id,outletSlug,outletName])).rows[0];
     await c.query('INSERT INTO tenant_settings(tenant_id) VALUES($1)', [t.id]);
@@ -60,6 +97,7 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
     await c.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'owner')", [t.id,o.id,membership.id]);
     return { tenantId:t.id,outletId:o.id,staffId:staff.id };
   }, bootstrapPool);
+  if (created.alreadyBootstrapped) return res.status(409).json({ error:'Bootstrap sudah pernah diselesaikan. Endpoint ini hanya untuk provisioning awal.' });
   res.status(201).json({ ok:true,...created });
 }));
 
@@ -115,19 +153,25 @@ async function issueSession(staffId, credentialColumn, credential, res) {
 app.post('/api/auth/pin', asyncRoute(async (req,res) => {
   const pin = String(req.body?.pin || '');
   if (!/^\d{4,8}$/.test(pin)) return res.status(400).json({ error:'PIN harus 4–8 digit.' });
+  const retryAfter = await consumeAuthAttempt(req);
+  if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
   const candidates = await transaction(async c => { await c.query("SELECT set_config('app.auth_lookup','true',true)"); return c.query("SELECT id,pin_hash FROM staff_accounts WHERE status='active' AND pin_hash IS NOT NULL"); });
   const found = [];
   for (const row of candidates.rows) if (await verifyCredential(pin,row.pin_hash)) found.push(row);
   if (found.length !== 1) return res.status(401).json({ error:'PIN tidak valid atau akun tidak aktif.' });
+  await clearAuthAttempts(req);
   return issueSession(found[0].id,'pin_hash',pin,res);
 }));
 app.post('/api/auth/nfc', asyncRoute(async (req,res) => {
   const uid = String(req.body?.uid || '').trim().toUpperCase();
   if (!uid) return res.status(400).json({ error:'NFC UID wajib diisi.' });
+  const retryAfter = await consumeAuthAttempt(req);
+  if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
   const candidates = await transaction(async c => { await c.query("SELECT set_config('app.auth_lookup','true',true)"); return c.query("SELECT id,nfc_credential_hash FROM staff_accounts WHERE status='active' AND nfc_credential_hash IS NOT NULL"); });
   const found = [];
   for (const row of candidates.rows) if (await verifyCredential(uid,row.nfc_credential_hash)) found.push(row);
   if (found.length !== 1) return res.status(401).json({ error:'Kartu NFC tidak dikenal atau tidak aktif.' });
+  await clearAuthAttempts(req);
   return issueSession(found[0].id,'nfc_credential_hash',uid,res);
 }));
 app.post('/api/auth/logout', authenticate, asyncRoute(async (req,res) => {
@@ -167,6 +211,12 @@ app.post('/api/sessions', authenticate, asyncRoute(async (req,res) => {
   const { tableId, guestCount=1, waiterStaffId } = req.body || {};
   if (!tableId || !Number.isInteger(guestCount) || guestCount<1 || guestCount>100) return res.status(400).json({error:'tableId dan guestCount (1–100) wajib valid.'});
   const result = await scoped(req, async c => {
+    if (waiterStaffId) {
+      const waiter = await c.query(`SELECT 1 FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id
+        WHERE tm.staff_id=$1 AND tm.tenant_id=$2 AND tm.status='active' AND om.outlet_id=$3 AND om.status='active' LIMIT 1`,
+        [waiterStaffId,req.auth.tenant_id,req.auth.outlet_id]);
+      if (!waiter.rowCount) return {status:400,body:{error:'Waiter tidak terdaftar pada outlet aktif ini.'}};
+    }
     const table = await c.query('SELECT id,capacity FROM dining_tables WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND is_active FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,tableId]);
     if (!table.rowCount) return {status:404,body:{error:'Meja tidak ditemukan atau nonaktif.'}};
     if (guestCount>table.rows[0].capacity) return {status:400,body:{error:'Jumlah tamu melebihi kapasitas meja.'}};
@@ -224,7 +274,10 @@ app.post('/api/sessions/:sessionId/payments', authenticate, asyncRoute(async (re
   if (!['cash','qris','card','transfer','other'].includes(method) || typeof idempotencyKey!=='string' || idempotencyKey.length<8 || idempotencyKey.length>128 || !Number.isFinite(Number(discountAmount)) || Number(discountAmount)<0) return res.status(400).json({error:'Metode, idempotencyKey (8–128 karakter), atau diskon tidak valid.'});
   const result=await scoped(req,async c=>{
     const existing=await c.query('SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND idempotency_key=$3',[req.auth.tenant_id,req.auth.outlet_id,idempotencyKey]);
-    if(existing.rowCount) return {status:200,body:existing.rows[0]};
+    if(existing.rowCount) {
+      if (existing.rows[0].session_id !== req.params.sessionId) return {status:409,body:{error:'Idempotency key sudah digunakan untuk sesi transaksi lain.'}};
+      return {status:200,body:existing.rows[0]};
+    }
     const session=await c.query("SELECT * FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing') FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     if(!session.rowCount) return {status:404,body:{error:'Sesi meja tidak ditemukan atau sudah ditutup.'}};
     const items=await c.query("SELECT id,line_total FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND cooking_status<>'cancelled' ORDER BY created_at FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
