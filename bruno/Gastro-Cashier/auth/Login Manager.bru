@@ -1,0 +1,20 @@
+meta {
+  name: Login Manager
+  type: http
+  seq: 2
+}
+post {
+  url: {{baseUrl}}/api/auth/pin
+  body: json
+  auth: none
+}
+body:json {
+  pin: {{managerPin}}
+}
+script:post-response {
+  bru.setEnvVar("managerToken", res.body.token);
+  test("manager login returns bearer token", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.staff.role).to.equal("manager");
+  });
+}
