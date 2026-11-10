@@ -113,6 +113,21 @@ try {
   if ((await runtime.query('SELECT id FROM staff_sessions')).rowCount !== 0) throw new Error('Tenant context alone exposed staff sessions');
   await runtime.query('ROLLBACK');
 
+  phase('verify signed context cannot be replayed or tampered across transactions');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
+  const capturedToken=(await runtime.query("SELECT current_setting('app.context_token') AS token")).rows[0].token;
+  if((await runtime.query('SELECT id FROM dining_tables')).rowCount!==1) throw new Error('Fresh signed context was not accepted.');
+  await runtime.query('COMMIT');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await runtime.query("SELECT set_config('app.context_token',$1,true)",[capturedToken]);
+  if((await runtime.query('SELECT id FROM dining_tables')).rowCount!==0) throw new Error('A signed context token was replayed in a different transaction.');
+  await runtime.query('ROLLBACK');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await runtime.query("SELECT set_config('app.context_token',$1,true)",[capturedToken+'tampered']);
+  if((await runtime.query('SELECT id FROM dining_tables')).rowCount!==0) throw new Error('A tampered signed context token was accepted.');
+  await runtime.query('ROLLBACK');
+
   phase('verify tenant/outlet isolation including security-invoker view');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
