@@ -23,6 +23,7 @@ DO $$ DECLARE tbl TEXT; BEGIN
  DROP POLICY IF EXISTS staff_session_token_only ON staff_sessions;
  DROP POLICY IF EXISTS staff_session_insert ON staff_sessions;
  DROP POLICY IF EXISTS staff_session_select_active ON staff_sessions;
+ DROP POLICY IF EXISTS staff_session_select_own ON staff_sessions;
  DROP POLICY IF EXISTS staff_session_revoke_own ON staff_sessions;
 END $$;
 -- Tenant/outlet policies. Missing context always denies access.
