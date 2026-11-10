@@ -30,28 +30,42 @@ try {
     throw new Error(`Refusing baseline migration on non-empty database "${state.rows[0].database}". Found ${existing.rowCount} public objects; no schema changes applied.`);
   }
 
-  const schemaPath = fileURLToPath(new URL('../schema.sql', import.meta.url));
-  const schema = await readFile(path.resolve(schemaPath), 'utf8');
-  // schema.sql owns its transaction. The advisory lock remains held on this session
-  // while the schema transaction runs, so a second migration cannot pass the check.
-  await client.query(schema);
+  const migrationFiles = [
+    '../schema.sql',
+    '../db/migrations/002_rls_runtime_hardening.sql',
+    '../db/migrations/003_staff_admin_management.sql',
+    '../db/migrations/004_signed_rls_context.sql'
+  ];
+  const applied = [];
+  // Each SQL file owns its transaction. Keep the advisory lock held across the
+  // complete baseline + hardening sequence so concurrent bootstrap cannot race.
+  for (const relativePath of migrationFiles) {
+    const migrationPath = fileURLToPath(new URL(relativePath, import.meta.url));
+    const migrationSql = await readFile(path.resolve(migrationPath), 'utf8');
+    await client.query(migrationSql);
+    applied.push(relativePath);
+  }
 
   const verify = await client.query(`
     SELECT to_regclass('public.tenants') AS tenants,
            to_regclass('public.dining_sessions') AS dining_sessions,
            to_regclass('public.menu_items') AS menu_items,
            to_regclass('public.staff_sessions') AS staff_sessions,
-           to_regclass('public.v_table_board') AS table_board
+           to_regclass('public.v_table_board') AS table_board,
+           to_regclass('app_private.rls_context_keys') AS rls_context_keys,
+           to_regprocedure('app_private.rls_context()') AS rls_context
   `);
   const row = verify.rows[0];
-  if (!row.tenants || !row.dining_sessions || !row.menu_items || !row.staff_sessions || !row.table_board) {
+  if (!row.tenants || !row.dining_sessions || !row.menu_items || !row.staff_sessions ||
+      !row.table_board || !row.rls_context_keys || !row.rls_context) {
     throw new Error('Post-migration verification failed. Inspect database state before retrying.');
   }
   console.log(JSON.stringify({
     migration: 'success',
     database: state.rows[0].database,
     postgresVersion: state.rows[0].version,
-    verified: ['tenants', 'dining_sessions', 'menu_items', 'staff_sessions', 'v_table_board']
+    applied,
+    verified: ['tenants', 'dining_sessions', 'menu_items', 'staff_sessions', 'v_table_board', 'app_private.rls_context_keys', 'app_private.rls_context()']
   }, null, 2));
 } catch (error) {
   console.error('Migration stopped:', error.message);
