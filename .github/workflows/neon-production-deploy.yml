@@ -192,7 +192,7 @@ jobs:
             const unowned=t.rows.filter(x=>!x.owned).map(x=>x.relname);
             if(unowned.length) throw new Error('Admin role does not own required application relations: '+unowned.join(', '));
             const existingRole=await c.query(`SELECT r.rolsuper,
-              EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m') AND x.relowner=r.oid) AS owns_objects,
+              EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m','S') AND x.relowner=r.oid) AS owns_objects,
               EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND nspowner=r.oid) AS owns_schema,
               EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships
               FROM pg_roles r WHERE r.rolname='gastro_runtime'`);
