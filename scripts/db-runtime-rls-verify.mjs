@@ -1,12 +1,23 @@
 import pg from 'pg';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 
 const { Client } = pg;
 const connectionString = process.env.DATABASE_URL;
 const tenantId = process.env.NEON_RLS_TEST_TENANT_ID;
 const outletId = process.env.NEON_RLS_TEST_OUTLET_ID;
-if (!connectionString || !tenantId || !outletId) {
-  throw new Error('DATABASE_URL, NEON_RLS_TEST_TENANT_ID and NEON_RLS_TEST_OUTLET_ID are required.');
+const contextSecret = process.env.RLS_CONTEXT_HMAC_SECRET;
+if (!connectionString || !tenantId || !outletId || !contextSecret || Buffer.byteLength(contextSecret,'utf8') < 32) {
+  throw new Error('DATABASE_URL, RLS_CONTEXT_HMAC_SECRET (>=32 bytes), NEON_RLS_TEST_TENANT_ID and NEON_RLS_TEST_OUTLET_ID are required.');
+}
+function signedContext(claims) {
+  const now=Math.floor(Date.now()/1000);
+  const payloadBytes=Buffer.from(JSON.stringify({v:'1',iat:now,exp:now+60,jti:randomUUID(),...claims}));
+  const payload=payloadBytes.toString('base64url');
+  return payload+'.'+createHmac('sha256',contextSecret).update(payloadBytes).digest('base64url');
+}
+async function applyContext(client,claims) {
+  const tx=await client.query('SELECT txid_current()::text AS txid');
+  await client.query("SELECT set_config('app.context_token',$1,true)",[signedContext({...claims,txid:tx.rows[0].txid})]);
 }
 for (const [name, value] of [['NEON_RLS_TEST_TENANT_ID', tenantId], ['NEON_RLS_TEST_OUTLET_ID', outletId]]) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new Error(name + ' must be a UUID.');
@@ -47,12 +58,19 @@ try {
     (SELECT count(*) FROM auth_rate_limits)::int AS auth_rate_limits`);
   if (Object.values(noContext.rows[0]).some(Number)) fail('query without tenant/outlet context returned rows: ' + JSON.stringify(noContext.rows[0]));
 
-  await c.query("SELECT set_config('app.auth_lookup','true',true)");
+  await c.query("SELECT set_config('app.auth_lookup','true',true),set_config('app.bootstrap_mode','true',true),set_config('app.staff_admin','true',true),set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[tenantId,outletId]);
+  const forged = await c.query(`SELECT
+    (SELECT count(*) FROM tenants)::int AS tenants,
+    (SELECT count(*) FROM staff_accounts)::int AS staff_accounts,
+    (SELECT count(*) FROM dining_tables)::int AS dining_tables,
+    (SELECT count(*) FROM auth_rate_limits)::int AS auth_rate_limits`);
+  if(Object.values(forged.rows[0]).some(Number)) fail('legacy caller-set GUCs forged RLS access: '+JSON.stringify(forged.rows[0]));
+  await applyContext(c,{capabilities:['auth_lookup']});
   const auth = await c.query('SELECT count(*)::int AS n FROM staff_accounts');
   if (auth.rows[0].n < 1) fail('explicit auth lookup found no staff accounts; cannot validate real auth visibility.');
   if (Number((await c.query('SELECT count(*)::int AS n FROM staff_sessions')).rows[0].n) !== 0) fail('auth lookup exposed staff sessions.');
 
-  await c.query("SELECT set_config('app.auth_lookup','false',true), set_config('app.tenant_id',$1,true), set_config('app.outlet_id',$2,true)", [tenantId, outletId]);
+  await applyContext(c,{tenant_id:tenantId,outlet_id:outletId,capabilities:['tenant_scope']});
   const outlet = await c.query('SELECT id FROM outlets WHERE id=$1 AND tenant_id=$2', [outletId, tenantId]);
   if (outlet.rowCount !== 1) fail('configured RLS test outlet is not visible under the configured tenant.');
   const tables = await c.query('SELECT tenant_id,outlet_id FROM dining_tables');
@@ -63,7 +81,7 @@ try {
   if (sessions.rows.some(r => r.tenant_id !== tenantId || r.outlet_id !== outletId)) fail('dining_sessions leaked rows outside configured tenant/outlet.');
   const staff = await c.query('SELECT id FROM staff_accounts');
   if (staff.rowCount < 1) fail('tenant-scoped staff lookup returned no rows for configured test tenant.');
-  await c.query("SELECT set_config('app.outlet_id',$1,true)", [randomUUID()]);
+  await applyContext(c,{tenant_id:tenantId,outlet_id:randomUUID(),capabilities:['tenant_scope']});
   const wrongOutlet = await c.query('SELECT id FROM dining_tables');
   if (wrongOutlet.rowCount !== 0) fail('a different outlet context returned dining table rows.');
   await c.query('ROLLBACK');

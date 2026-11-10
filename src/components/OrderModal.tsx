@@ -8,7 +8,6 @@ import {
   PaymentFlowMode,
   DiscountType,
 } from '../types/pos';
-import { MENU_ITEMS } from '../data/initialData';
 import {
   formatRupiah,
   calculateItemSubtotal,
@@ -43,10 +42,12 @@ import { nextBatchNumber } from '../utils/auditFlow';
 
 interface OrderModalProps {
   table: Table;
+  menuItems: MenuItem[];
   existingTransaction?: Transaction;
   menuStock: Record<string, number>;
   staffName?: string;
   paymentFlowMode: PaymentFlowMode;
+  allowPaymentFirst?: boolean;
   onChangePaymentFlowMode: (mode: PaymentFlowMode) => void;
   onClose: () => void;
   onSubmitOrder: (params: {
@@ -72,10 +73,12 @@ interface OrderModalProps {
 
 export const OrderModal: React.FC<OrderModalProps> = ({
   table,
+  menuItems,
   existingTransaction,
   menuStock,
   staffName,
   paymentFlowMode,
+  allowPaymentFirst = true,
   onChangePaymentFlowMode,
   onClose,
   onSubmitOrder,
@@ -112,7 +115,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
     notes: string;
   } | null>(null);
 
-  const filteredMenuItems = MENU_ITEMS.filter((item) => {
+  const filteredMenuItems = menuItems.filter((item) => {
     if (categoryFilter !== 'all' && item.category !== categoryFilter) return false;
     if (searchQuery.trim() !== '') {
       return item.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -233,6 +236,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   };
 
   const handleSwitchMode = (mode: PaymentFlowMode) => {
+    if (mode === 'payment_first' && !allowPaymentFirst) return;
     sounds.playTapSound();
     onChangePaymentFlowMode(mode);
   };
@@ -943,9 +947,11 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                 <button
                   type="button"
                   aria-pressed={paymentFlowMode === 'payment_first'}
+                  aria-disabled={!allowPaymentFirst}
+                  disabled={!allowPaymentFirst}
                   onClick={() => handleSwitchMode('payment_first')}
-                  className={`min-h-[52px] px-3 py-2 text-left flex items-center gap-2.5 cursor-pointer ${
-                    paymentFlowMode === 'payment_first' ? 'clay-btn-indigo' : 'clay-btn-neutral'
+                  className={`min-h-[52px] px-3 py-2 text-left flex items-center gap-2.5 ${
+                    !allowPaymentFirst ? 'clay-btn-disabled cursor-not-allowed opacity-60' : paymentFlowMode === 'payment_first' ? 'clay-btn-indigo cursor-pointer' : 'clay-btn-neutral cursor-pointer'
                   }`}
                 >
                   <CreditCard className="w-4 h-4 shrink-0" />
@@ -956,7 +962,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                         paymentFlowMode === 'payment_first' ? 'text-indigo-100' : 'text-slate-500'
                       }`}
                     >
-                      Langsung Bayar
+                      {allowPaymentFirst ? 'Langsung Bayar' : 'Belum tersedia di mode API'}
                     </div>
                   </div>
                 </button>
@@ -986,7 +992,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                 </div>
               ) : (
                 cartItems.map((item, index) => {
-                  const sourceMenuItem = MENU_ITEMS.find((m) => m.id === item.menuItemId);
+                  const sourceMenuItem = menuItems.find((m) => m.id === item.menuItemId);
                   return (
                     <div
                       key={item.id}

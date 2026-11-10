@@ -48,6 +48,15 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
         run: node --input-type=module -e "import {readFile} from 'node:fs/promises'; import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const sql=await readFile('db/migrations/003_staff_admin_management.sql','utf8'); await c.query(sql); await c.query(sql); await c.end();"
+      - name: Verify signed RLS context migration is repeatable
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: node --input-type=module -e "import {readFile} from 'node:fs/promises'; import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const sql=await readFile('db/migrations/004_signed_rls_context.sql','utf8'); await c.query(sql); await c.query(sql); await c.end();"
+      - name: Provision ephemeral CI signing key
+        env:
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+          RLS_CONTEXT_HMAC_SECRET: ci-only-test-key-do-not-use-outside-ephemeral-ci
+        run: npm run db:provision-rls-context-key
       - name: Seed an overprivileged pre-existing runtime role to test privilege cleanup
         env:
           PGPASSWORD: postgres
@@ -63,6 +72,31 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
           RUNTIME_DB_PASSWORD: ci-runtime-password-with-more-than-24-characters
         run: npm run db:provision-runtime-role
+      - name: Set ephemeral CI runtime-role password
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d gastro_test -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER ROLE gastro_runtime PASSWORD 'ci-runtime-password-with-more-than-24-characters';
+          SQL
+      - name: Apply emergency staff-read-only privilege migration twice
+        env:
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          import { readFile } from 'node:fs/promises';
+          const c=new pg.Client({connectionString:process.env.ADMIN_DATABASE_URL});
+          await c.connect();
+          const sql=await readFile('db/migrations/005_emergency_staff_readonly.sql','utf8');
+          await c.query(sql);
+          await c.query(sql);
+          await c.end();
+          NODE
+      - name: Verify runtime staff mutations are denied while reads remain allowed
+        env:
+          DATABASE_URL: postgresql://gastro_runtime:ci-runtime-password-with-more-than-24-characters@localhost:5432/gastro_test
+        run: node scripts/db-emergency-staff-readonly.mjs
       - name: Assert stale table, truncate and schema-create grants were revoked
         run: |
           node --input-type=module <<'NODE'

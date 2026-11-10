@@ -4,9 +4,23 @@ The repository contains a PostgreSQL-backed API foundation, guarded baseline sch
 
 ## Authentication abuse protection
 
-PIN and NFC authentication attempts are rate-limited in PostgreSQL by a SHA-256 hash of the client IP, shared across API instances: five attempts per 15-minute window are allowed, then the source is blocked for 30 seconds. Successful authentication resets the counter. The raw IP address is not stored. The ledger is protected by forced RLS and is only visible when the API sets the transaction-local `app.auth_rate_limit` context.
+PIN and NFC authentication attempts are rate-limited in PostgreSQL by a SHA-256 hash of the client IP, shared across API instances: five attempts per 15-minute window are allowed, then the source is blocked for 30 seconds. Successful authentication resets the counter. The raw IP address is not stored. The ledger is protected by forced RLS and is only visible with a signed `auth_rate_limit` capability. All request authorization context is HMAC-signed by the API and verified inside PostgreSQL; caller-set legacy GUC values do not grant access.
 
 If the API runs behind a reverse proxy, set `TRUST_PROXY_HOPS` to the exact number of trusted proxy hops so Express can determine the client IP correctly. Do not enable proxy trust without configuring the trusted network path; otherwise client IPs may be spoofed. Expired ledger rows should be periodically pruned as an operational maintenance task.
+
+## Signed RLS request context
+
+Migration `db/migrations/004_signed_rls_context.sql` replaces the legacy GUC-based RLS predicates with a database-verified HMAC-signed context. The API requires `RLS_CONTEXT_HMAC_SECRET` (at least 32 random bytes). Provision the same value into the private database key table using a schema-owner/admin connection:
+
+```bash
+ADMIN_DATABASE_URL='postgresql://...' RLS_CONTEXT_HMAC_SECRET='...' npm run db:provision-rls-context-key
+```
+
+Keep the key in the API hosting provider's server-only environment and in the database's private key table. Do not commit it, expose it as a `VITE_` variable, or give it to ordinary runtime clients. Rotate it only through a coordinated API/database key update. The provisioning command overwrites the active key, so rotation requires a controlled maintenance window or a reviewed dual-key rotation migration.
+
+The gated Neon deployment workflow now applies migration 004, provisions the matching private signing key, and verifies signed-context isolation after the backup and human approval gate. It does not modify application hosting secrets or restart the API. No migration or key provisioning is automatic.
+
+**Required coordinated cutover:** this migration intentionally stops trusting legacy GUCs, so old API instances will fail closed after it is applied. Before dispatching the workflow, put the POS/API into a maintenance window or block application traffic, deploy the API version containing the signed-context code with `RLS_CONTEXT_HMAC_SECRET` set to the same value as `NEON_RLS_CONTEXT_HMAC_SECRET`, then run the gated database migration and verification. Reopen traffic only after the workflow succeeds and the API health/auth/POS smoke tests pass. Do not run the migration while old API instances are still serving requests.
 
 ## Read-only inspection
 
@@ -44,6 +58,7 @@ Add these as **repository Actions secrets** (not only Environment secrets), beca
 | `NEON_EXPECTED_DATABASE` | Exact database name from that connection URL |
 | `NEON_BACKUP_PASSPHRASE` | Random encryption passphrase, at least 32 characters |
 | `NEON_RUNTIME_DB_PASSWORD` | New random password for `gastro_runtime`, at least 24 characters |
+| `NEON_RLS_CONTEXT_HMAC_SECRET` | Random server-only HMAC key, at least 32 bytes; provisioned to the private DB key table by the gated workflow |
 | `NEON_RLS_TEST_TENANT_ID` | UUID of a real tenant used for read-only RLS verification |
 | `NEON_RLS_TEST_OUTLET_ID` | UUID of an existing outlet belonging to that tenant |
 
@@ -61,6 +76,6 @@ Every step is fail-fast. Migration cannot start if backup creation, encryption/d
 - This is a logical backup, not a Neon point-in-time recovery setting. Confirm Neon backup/PITR retention separately.
 - The RLS verification requires the configured tenant and outlet to exist and have at least one staff account. It performs SELECT-only checks; it does not insert fixtures or delete production rows.
 - Provisioning updates the password and grants for `gastro_runtime`. Review existing role usage before dispatching; do not reuse the role for unrelated services.
-- After successful verification, set the API's server-only `DATABASE_URL` to the `gastro_runtime` connection string and keep admin credentials out of the API runtime. The workflow does not modify application hosting secrets or restart the API.
+- After successful verification, set the API's server-only `DATABASE_URL` to the `gastro_runtime` connection string and set `RLS_CONTEXT_HMAC_SECRET` in the API hosting provider to the exact same value as `NEON_RLS_CONTEXT_HMAC_SECRET`. Keep admin credentials out of the API runtime. The workflow does not modify application hosting secrets or restart the API.
 - `BOOTSTRAP_DATABASE_URL` remains a separate temporary privileged connection for the token-protected bootstrap endpoint; remove it after one-time provisioning.
 - Bearer tokens are currently held in browser localStorage. Move to Secure/HttpOnly/SameSite cookies before public deployment.

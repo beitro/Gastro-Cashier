@@ -1,6 +1,6 @@
 import express from 'express';
 import pg from 'pg';
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -18,6 +18,28 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process
 const bootstrapPool = process.env.BOOTSTRAP_DATABASE_URL ? new Pool({ connectionString: process.env.BOOTSTRAP_DATABASE_URL, ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined, max: 2, connectionTimeoutMillis: 5000 }) : null;
 const scrypt = promisify(scryptCallback);
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+const rlsContextSecret = process.env.RLS_CONTEXT_HMAC_SECRET;
+if (!rlsContextSecret || Buffer.byteLength(rlsContextSecret, 'utf8') < 32) {
+  throw new Error('RLS_CONTEXT_HMAC_SECRET must be configured with at least 32 bytes before starting the API.');
+}
+function signRlsContext(claims) {
+  const now = Math.floor(Date.now() / 1000);
+  const payloadBytes = Buffer.from(JSON.stringify({
+    v: '1', iat: now, exp: now + 60, jti: randomBytes(16).toString('hex'),
+    ...claims
+  }), 'utf8');
+  const payload = payloadBytes.toString('base64url');
+  const signature = createHmac('sha256', rlsContextSecret).update(payloadBytes).digest('base64url');
+  return payload + '.' + signature;
+}
+async function setRlsContext(client, claims) {
+  const tx = await client.query('SELECT txid_current()::text AS txid');
+  await client.query(
+    "SELECT set_config('app.tenant_id',$1,true), set_config('app.outlet_id',$2,true)",
+    [claims.tenant_id || '', claims.outlet_id || '']
+  );
+  await client.query("SELECT set_config('app.context_token',$1,true)", [signRlsContext({ ...claims, txid: tx.rows[0].txid })]);
+}
 const normalizeRole = (role) => role === 'owner' ? 'owner' : role === 'finance' ? 'finance' : role === 'cashier' ? 'cashier' : null;
 function requireOwner(req,res,next) { if (!req.auth || req.auth.role_code !== 'owner') return res.status(403).json({error:'Hanya Owner yang dapat mengelola staff.'}); next(); }
 function requirePosRole(req, res, next) {
@@ -53,7 +75,7 @@ function authScopeHash(req) { return sha256(String(req.ip || req.socket?.remoteA
 async function consumeAuthAttempt(req) {
   const scopeHash = authScopeHash(req);
   return transaction(async c => {
-    await c.query("SELECT set_config('app.auth_rate_limit','true',true)");
+    await setRlsContext(c, { capabilities: ['auth_rate_limit'] });
     await c.query('INSERT INTO auth_rate_limits(scope_hash) VALUES($1) ON CONFLICT(scope_hash) DO NOTHING', [scopeHash]);
     const result = await c.query('SELECT failed_attempts,window_started_at,blocked_until FROM auth_rate_limits WHERE scope_hash=$1 FOR UPDATE', [scopeHash]);
     const row = result.rows[0], now = Date.now();
@@ -74,7 +96,7 @@ async function consumeAuthAttempt(req) {
 }
 async function clearAuthAttempts(req) {
   await transaction(async c => {
-    await c.query("SELECT set_config('app.auth_rate_limit','true',true)");
+    await setRlsContext(c, { capabilities: ['auth_rate_limit'] });
     await c.query('UPDATE auth_rate_limits SET failed_attempts=0,window_started_at=now(),blocked_until=NULL,updated_at=now() WHERE scope_hash=$1', [authScopeHash(req)]);
   });
 }
@@ -83,6 +105,12 @@ app.get('/api/health', asyncRoute(async (_req, res) => {
   const r = await pool.query('SELECT current_setting($1) AS version', ['server_version']);
   res.json({ ok: true, database: 'postgresql', version: r.rows[0].version });
 }));
+
+// Emergency release: bootstrap creates a staff account through the separate privileged connection.
+app.use('/api/bootstrap', (req,res,next) => {
+  if (req.method !== 'POST') return next();
+  return res.status(423).json({ error:'Bootstrap dinonaktifkan selama emergency release; provisioning harus dilakukan di luar API runtime.', code:'BOOTSTRAP_DISABLED' });
+});
 
 // One-time tenant/outlet/staff provisioning. Keep BOOTSTRAP_TOKEN out of source control.
 app.post('/api/bootstrap', asyncRoute(async (req, res) => {
@@ -94,10 +122,11 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
   const nfcHash = nfcUid ? await hashCredential(String(nfcUid).trim().toUpperCase()) : null;
   const created = await transaction(async c => {
     await c.query("SELECT pg_advisory_xact_lock(hashtext('gastro_cashier_one_time_bootstrap'))");
-    await c.query("SELECT set_config('app.bootstrap_mode','true',true)");
+    await setRlsContext(c, { capabilities: ['bootstrap'] });
     if ((await c.query('SELECT 1 FROM tenants LIMIT 1')).rowCount) return { alreadyBootstrapped: true };
     const t = (await c.query('INSERT INTO tenants(slug,name) VALUES($1,$2) RETURNING id', [tenantSlug,tenantName])).rows[0];
     const o = (await c.query('INSERT INTO outlets(tenant_id,slug,name) VALUES($1,$2,$3) RETURNING id', [t.id,outletSlug,outletName])).rows[0];
+    await setRlsContext(c, { tenant_id: t.id, outlet_id: o.id, capabilities: ['bootstrap','tenant_scope'] });
     await c.query('INSERT INTO tenant_settings(tenant_id) VALUES($1)', [t.id]);
     const staff = (await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash,nfc_credential_hash) VALUES($1,$2,$3,$4) RETURNING id', [email || null,staffName,pinHash,nfcHash])).rows[0];
     const membership = (await c.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'owner') RETURNING id", [t.id,staff.id])).rows[0];
@@ -114,10 +143,10 @@ async function authenticate(req, res, next) {
     if (!token) return res.status(401).json({ error:'Sesi login diperlukan.' });
     const tokenHash = sha256(token);
     const auth = await transaction(async c => {
-      await c.query("SELECT set_config('app.session_token_hash',$1,true)",[tokenHash]);
+      await setRlsContext(c, { capabilities: ['session_lookup'], session_token_hash: tokenHash });
       const session = await c.query("SELECT staff_id,tenant_id,outlet_id FROM staff_sessions WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()",[tokenHash]);
       if (!session.rowCount) return null;
-      await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[session.rows[0].tenant_id,session.rows[0].outlet_id]);
+      await setRlsContext(c, { tenant_id: session.rows[0].tenant_id, outlet_id: session.rows[0].outlet_id, capabilities: ['tenant_scope','session_lookup'], session_token_hash: tokenHash });
       const result = await c.query(`SELECT s.id AS session_id, a.id AS staff_id, a.display_name,
         tm.role_code, t.id AS tenant_id, t.name AS tenant_name, o.id AS outlet_id, o.name AS outlet_name
         FROM staff_sessions s JOIN staff_accounts a ON a.id=s.staff_id
@@ -135,7 +164,7 @@ async function authenticate(req, res, next) {
 
 async function issueSession(staffId, credentialColumn, credential, res) {
   const issued = await transaction(async c => {
-    await c.query("SELECT set_config('app.auth_lookup','true',true)");
+    await setRlsContext(c, { capabilities: ['auth_lookup'] });
     const matches = await c.query(`SELECT a.id AS staff_id,a.display_name,tm.role_code,t.id AS tenant_id,t.name AS tenant_name,o.id AS outlet_id,o.name AS outlet_name,a.${credentialColumn} AS credential_hash
       FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.status='active'
       JOIN tenants t ON t.id=tm.tenant_id AND t.status='active'
@@ -148,7 +177,7 @@ async function issueSession(staffId, credentialColumn, credential, res) {
     if (matched.length > 1) return { error:'multiple' };
     if (!normalizeRole(matched[0].role_code)) return { error:'role' };
     const row = matched[0], token = randomBytes(32).toString('base64url');
-    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[row.tenant_id,row.outlet_id]);
+    await setRlsContext(c, { tenant_id: row.tenant_id, outlet_id: row.outlet_id, actor_staff_id: row.staff_id, role_code: row.role_code, capabilities: ['session_create'] });
     await c.query('INSERT INTO staff_sessions(staff_id,tenant_id,outlet_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+make_interval(hours => 12))',[row.staff_id,row.tenant_id,row.outlet_id,sha256(token)]);
     return { row, token };
   });
@@ -164,7 +193,7 @@ app.post('/api/auth/pin', asyncRoute(async (req,res) => {
   if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error:'PIN harus tepat 4 digit.' });
   const retryAfter = await consumeAuthAttempt(req);
   if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
-  const candidates = await transaction(async c => { await c.query("SELECT set_config('app.auth_lookup','true',true)"); return c.query("SELECT id,pin_hash FROM staff_accounts WHERE status='active' AND pin_hash IS NOT NULL"); });
+  const candidates = await transaction(async c => { await setRlsContext(c, { capabilities: ['auth_lookup'] }); return c.query("SELECT id,pin_hash FROM staff_accounts WHERE status='active' AND pin_hash IS NOT NULL"); });
   const found = [];
   for (const row of candidates.rows) if (await verifyCredential(pin,row.pin_hash)) found.push(row);
   if (found.length !== 1) return res.status(401).json({ error:'PIN tidak valid atau akun tidak aktif.' });
@@ -176,7 +205,7 @@ app.post('/api/auth/nfc', asyncRoute(async (req,res) => {
   if (!uid) return res.status(400).json({ error:'NFC UID wajib diisi.' });
   const retryAfter = await consumeAuthAttempt(req);
   if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
-  const candidates = await transaction(async c => { await c.query("SELECT set_config('app.auth_lookup','true',true)"); return c.query("SELECT id,nfc_credential_hash FROM staff_accounts WHERE status='active' AND nfc_credential_hash IS NOT NULL"); });
+  const candidates = await transaction(async c => { await setRlsContext(c, { capabilities: ['auth_lookup'] }); return c.query("SELECT id,nfc_credential_hash FROM staff_accounts WHERE status='active' AND nfc_credential_hash IS NOT NULL"); });
   const found = [];
   for (const row of candidates.rows) if (await verifyCredential(uid,row.nfc_credential_hash)) found.push(row);
   if (found.length !== 1) return res.status(401).json({ error:'Kartu NFC tidak dikenal atau tidak aktif.' });
@@ -185,7 +214,7 @@ app.post('/api/auth/nfc', asyncRoute(async (req,res) => {
 }));
 app.post('/api/auth/logout', authenticate, asyncRoute(async (req,res) => {
   await transaction(async c => {
-    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true),set_config('app.session_token_hash',$3,true)",[req.auth.tenant_id,req.auth.outlet_id,req.tokenHash]);
+    await setRlsContext(c, { tenant_id: req.auth.tenant_id, outlet_id: req.auth.outlet_id, actor_staff_id: req.auth.staff_id, role_code: req.auth.role_code, session_token_hash: req.tokenHash, capabilities: ['tenant_scope','session_revoke_self'] });
     return c.query('UPDATE staff_sessions SET revoked_at=now() WHERE token_hash=$1 AND revoked_at IS NULL',[req.tokenHash]);
   });
   res.json({ ok:true });
@@ -198,14 +227,14 @@ app.get('/api/me', authenticate, (req,res) => {
 // Shared request helper: every tenant-scoped query runs with transaction-local RLS context.
 async function scoped(req, fn) {
   return transaction(async c => {
-    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[req.auth.tenant_id,req.auth.outlet_id]);
+    await setRlsContext(c, { tenant_id: req.auth.tenant_id, outlet_id: req.auth.outlet_id, actor_staff_id: req.auth.staff_id, role_code: req.auth.role_code, capabilities: ['tenant_scope'] });
     return fn(c);
   });
 }
 
 async function adminScoped(req,fn) {
   return transaction(async c=>{
-    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true),set_config('app.staff_admin','true',true),set_config('app.actor_staff_id',$3,true)",[req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id]);
+    await setRlsContext(c, { tenant_id: req.auth.tenant_id, outlet_id: req.auth.outlet_id, actor_staff_id: req.auth.staff_id, role_code: req.auth.role_code, capabilities: ['tenant_scope','staff_admin'] });
     return fn(c);
   });
 }
@@ -213,6 +242,11 @@ async function writeAdminAudit(c,req,action,staffId,beforeData,afterData,metadat
   await c.query('INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,ip_address,user_agent,before_data,after_data,metadata) VALUES($1,$2,$3,$4,\'staff\',$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb)',
     [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,action,staffId,req.ip||null,req.get('user-agent')||null,JSON.stringify(beforeData),JSON.stringify(afterData),JSON.stringify(metadata)]);
 }
+// Emergency release freeze: Admin staff reads remain available, all staff mutations are blocked.
+app.use('/api/admin/staff', (req,res,next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  return res.status(423).json({ error:'Administrasi staff sementara read-only selama emergency release POS.', code:'STAFF_ADMIN_READ_ONLY' });
+});
 const ADMIN_ROLES=['owner','cashier','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
@@ -223,8 +257,10 @@ app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=
   const role=req.body?.role,pin=String(req.body?.pin||'');
   if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4}$/.test(pin)||(!email&&!phone)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone))))return res.status(400).json({error:'Nama, kontak (email/telepon), role, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
+  const staffId=randomUUID();
   const created=await adminScoped(req,async c=>{
-    const a=(await c.query('INSERT INTO staff_accounts(email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[email,phone,name,pinHash])).rows[0];
+    await setRlsContext(c,{tenant_id:req.auth.tenant_id,outlet_id:req.auth.outlet_id,actor_staff_id:req.auth.staff_id,role_code:req.auth.role_code,pending_staff_id:staffId,capabilities:['tenant_scope','staff_admin']});
+    const a=(await c.query('INSERT INTO staff_accounts(id,email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4,$5) RETURNING id',[staffId,email,phone,name,pinHash])).rows[0];
     const tm=(await c.query('INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,$3) RETURNING id',[req.auth.tenant_id,a.id,role])).rows[0];
     await c.query('INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,$4)',[req.auth.tenant_id,req.auth.outlet_id,tm.id,role]);
     await writeAdminAudit(c,req,'staff.created',a.id,null,{name,role,status:'active'},{pinConfigured:true,nfcConfigured:false});
@@ -404,7 +440,7 @@ app.patch('/api/order-items/:itemId/kitchen-status', authenticate, requirePosRol
 // All outlet data endpoints set transaction-local RLS context after resolving the server-side session.
 app.get('/api/tables', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await transaction(async c => {
-    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[req.auth.tenant_id,req.auth.outlet_id]);
+    await setRlsContext(c, { tenant_id: req.auth.tenant_id, outlet_id: req.auth.outlet_id, actor_staff_id: req.auth.staff_id, role_code: req.auth.role_code, capabilities: ['tenant_scope'] });
     return (await c.query('SELECT * FROM v_table_board WHERE tenant_id=$1 AND outlet_id=$2 ORDER BY table_code',[req.auth.tenant_id,req.auth.outlet_id])).rows;
   });
   res.json(rows);
