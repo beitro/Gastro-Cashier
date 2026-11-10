@@ -314,21 +314,41 @@ CREATE POLICY staff_admin_update ON public.staff_accounts FOR UPDATE
   USING (
     app_private.rls_context()->'capabilities' ? 'staff_admin'
     AND app_private.rls_context()->>'role_code' = 'owner'
+    AND NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
+        = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
     AND EXISTS (
       SELECT 1 FROM public.tenant_memberships actor_tm
       WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
+        AND actor_tm.tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
         AND actor_tm.tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
         AND actor_tm.role_code = 'owner' AND actor_tm.status = 'active'
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.tenant_memberships target_tm
+      WHERE target_tm.staff_id = staff_accounts.id
+        AND target_tm.tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
+        AND target_tm.tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+        AND target_tm.status = 'active'
     )
   )
   WITH CHECK (
     app_private.rls_context()->'capabilities' ? 'staff_admin'
     AND app_private.rls_context()->>'role_code' = 'owner'
+    AND NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
+        = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
     AND EXISTS (
       SELECT 1 FROM public.tenant_memberships actor_tm
       WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
+        AND actor_tm.tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
         AND actor_tm.tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
         AND actor_tm.role_code = 'owner' AND actor_tm.status = 'active'
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.tenant_memberships target_tm
+      WHERE target_tm.staff_id = staff_accounts.id
+        AND target_tm.tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::UUID
+        AND target_tm.tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+        AND target_tm.status = 'active'
     )
   );
 
