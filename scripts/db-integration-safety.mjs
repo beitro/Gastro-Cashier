@@ -200,6 +200,11 @@ try {
   if(!verifiedClaims || verifiedClaims.role_code!=='owner' || verifiedClaims.actor_staff_id!==ids.staffA || !verifiedClaims.capabilities.includes('staff_admin')) throw new Error('Signed Owner context claims were not verified correctly: '+JSON.stringify(verifiedClaims));
   const visibleOwner=(await runtime.query("SELECT count(*)::int AS n FROM tenant_memberships WHERE tenant_id=$1 AND staff_id=$2 AND role_code='owner' AND status='active'",[ids.tenantA,ids.staffA])).rows[0].n;
   if(visibleOwner!==1) throw new Error('Signed Owner context cannot see the active owner membership required by admin RLS policy.');
+  const adminGate=(await runtime.query(`SELECT
+    app_private.rls_context()->'capabilities' ? 'staff_admin' AS has_admin_cap,
+    app_private.rls_context()->>'role_code' AS role_code,
+    EXISTS(SELECT 1 FROM tenant_memberships actor_tm WHERE actor_tm.staff_id=$1 AND actor_tm.tenant_id=$2 AND actor_tm.role_code='owner' AND actor_tm.status='active') AS owner_exists`,[ids.staffA,ids.tenantA])).rows[0];
+  if(!adminGate.has_admin_cap || adminGate.role_code!=='owner' || !adminGate.owner_exists) throw new Error('Signed Owner RLS gate false: '+JSON.stringify(adminGate));
   const createdStaff=(await runtime.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00'])).rows[0];
   ids.staffCreated=createdStaff.id;
   const createdMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'cashier') RETURNING id",[ids.tenantA,ids.staffCreated])).rows[0];
