@@ -1,5 +1,5 @@
 meta {
-  name: Login Manager
+  name: Login Manager or Owner
   type: http
   seq: 2
 }
@@ -9,12 +9,12 @@ post {
   auth: none
 }
 body:json {
-  pin: {{managerPin}}
+  pin: "{{approverPin}}"
 }
 script:post-response {
-  bru.setEnvVar("managerToken", res.body.token);
-  test("manager login returns bearer token", function() {
+  bru.setEnvVar("approverToken", res.body.token);
+  test("manager or owner login returns bearer token", function() {
     expect(res.status).to.equal(200);
-    expect(res.body.staff.role).to.equal("manager");
+    expect(["manager", "owner"]).to.include(res.body.staff.role);
   });
 }
