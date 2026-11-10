@@ -58,7 +58,7 @@ async function consumeAuthAttempt(req) {
       return 0;
     }
     if (row.failed_attempts >= AUTH_MAX_ATTEMPTS) {
-      const blocked = await c.query("UPDATE auth_rate_limits SET blocked_until=now()+interval '30 seconds',updated_at=now() WHERE scope_hash=$1 RETURNING blocked_until", [scopeHash]);
+      const blocked = await c.query("UPDATE auth_rate_limits SET blocked_until=now()+($2 * interval '1 millisecond'),updated_at=now() WHERE scope_hash=$1 RETURNING blocked_until", [scopeHash, AUTH_BLOCK_MS]);
       return Math.max(1, Math.ceil((new Date(blocked.rows[0].blocked_until).getTime() - now) / 1000));
     }
     await c.query('UPDATE auth_rate_limits SET failed_attempts=failed_attempts+1,updated_at=now() WHERE scope_hash=$1', [scopeHash]);
