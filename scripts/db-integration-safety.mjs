@@ -16,7 +16,8 @@ function signedContext(claims) {
   return payload + '.' + createHmac('sha256',contextSecret).update(payload).digest('base64url');
 }
 async function applyContext(client, claims) {
-  await client.query("SELECT set_config('app.context_token',$1,true)",[signedContext(claims)]);
+  const tx=await client.query('SELECT txid_current()::text AS txid');
+  await client.query("SELECT set_config('app.context_token',$1,true)",[signedContext({...claims,txid:tx.rows[0].txid})]);
 }
 const slug = randomUUID().replaceAll('-','').slice(0,16);
 let createdTestRole = false;
