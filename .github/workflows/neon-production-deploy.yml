@@ -122,6 +122,7 @@ jobs:
       NEON_EXPECTED_DATABASE: ${{ secrets.NEON_EXPECTED_DATABASE }}
       NEON_BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
       NEON_RUNTIME_DB_PASSWORD: ${{ secrets.NEON_RUNTIME_DB_PASSWORD }}
+      RLS_CONTEXT_HMAC_SECRET: ${{ secrets.NEON_RLS_CONTEXT_HMAC_SECRET }}
       NEON_RUNTIME_DB_ROLE: gastro_runtime
       NEON_RLS_TEST_TENANT_ID: ${{ secrets.NEON_RLS_TEST_TENANT_ID }}
       NEON_RLS_TEST_OUTLET_ID: ${{ secrets.NEON_RLS_TEST_OUTLET_ID }}
@@ -156,6 +157,8 @@ jobs:
           test -n "$NEON_EXPECTED_DATABASE"
           test -n "$NEON_RUNTIME_DB_PASSWORD"
           test "${#NEON_RUNTIME_DB_PASSWORD}" -ge 24
+          test -n "$RLS_CONTEXT_HMAC_SECRET"
+          test "${#RLS_CONTEXT_HMAC_SECRET}" -ge 32
           test -n "$NEON_RLS_TEST_TENANT_ID"
           test -n "$NEON_RLS_TEST_OUTLET_ID"
           node --input-type=module <<'NODE'
@@ -234,6 +237,13 @@ jobs:
           set -euo pipefail
           docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
             postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/003_staff_admin_management.sql'
+      - name: Apply signed RLS request-context migration 004
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/004_signed_rls_context.sql'
       - name: Provision least-privilege gastro_runtime role
         env:
           ADMIN_DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
@@ -243,6 +253,11 @@ jobs:
           set -euo pipefail
           npm install --no-save --no-package-lock --ignore-scripts pg@^8.16.3
           npm run db:provision-runtime-role
+      - name: Provision private RLS context signing key
+        env:
+          ADMIN_DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+          RLS_CONTEXT_HMAC_SECRET: ${{ secrets.NEON_RLS_CONTEXT_HMAC_SECRET }}
+        run: npm run db:provision-rls-context-key
       - name: Build runtime-only connection string without logging credentials
         run: |
           set -euo pipefail
@@ -258,6 +273,7 @@ jobs:
           NEON_RUNTIME_DB_ROLE: gastro_runtime
           NEON_RLS_TEST_TENANT_ID: ${{ secrets.NEON_RLS_TEST_TENANT_ID }}
           NEON_RLS_TEST_OUTLET_ID: ${{ secrets.NEON_RLS_TEST_OUTLET_ID }}
+          RLS_CONTEXT_HMAC_SECRET: ${{ secrets.NEON_RLS_CONTEXT_HMAC_SECRET }}
         run: |
           set -euo pipefail
           node scripts/db-runtime-rls-verify.mjs
