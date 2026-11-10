@@ -112,6 +112,7 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
     if ((await c.query('SELECT 1 FROM tenants LIMIT 1')).rowCount) return { alreadyBootstrapped: true };
     const t = (await c.query('INSERT INTO tenants(slug,name) VALUES($1,$2) RETURNING id', [tenantSlug,tenantName])).rows[0];
     const o = (await c.query('INSERT INTO outlets(tenant_id,slug,name) VALUES($1,$2,$3) RETURNING id', [t.id,outletSlug,outletName])).rows[0];
+    await setRlsContext(c, { capabilities: ['bootstrap','tenant_scope'], tenant_id: t.id, outlet_id: o.id });
     await c.query('INSERT INTO tenant_settings(tenant_id) VALUES($1)', [t.id]);
     const staff = (await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash,nfc_credential_hash) VALUES($1,$2,$3,$4) RETURNING id', [email || null,staffName,pinHash,nfcHash])).rows[0];
     const membership = (await c.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'owner') RETURNING id", [t.id,staff.id])).rows[0];
