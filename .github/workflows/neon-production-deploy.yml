@@ -194,9 +194,11 @@ jobs:
             const existingRole=await c.query(`SELECT r.rolsuper,
               EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m','S') AND x.relowner=r.oid) AS owns_objects,
               EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND nspowner=r.oid) AS owns_schema,
-              EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships
+              EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships,
+              has_schema_privilege(r.rolname,'public','CREATE') AS can_create_schema_objects,
+              has_database_privilege(r.rolname,current_database(),'CREATE') AS can_create_schemas
               FROM pg_roles r WHERE r.rolname='gastro_runtime'`);
-            if(existingRole.rowCount && (existingRole.rows[0].rolsuper || existingRole.rows[0].owns_objects || existingRole.rows[0].owns_schema || existingRole.rows[0].has_memberships)) throw new Error('Existing gastro_runtime role has privileged attributes, ownership, or memberships; manual remediation is required before migration.');
+            if(existingRole.rowCount && (existingRole.rows[0].rolsuper || existingRole.rows[0].owns_objects || existingRole.rows[0].owns_schema || existingRole.rows[0].has_memberships || existingRole.rows[0].can_create_schema_objects || existingRole.rows[0].can_create_schemas)) throw new Error('Existing gastro_runtime role has privileged attributes, ownership, or memberships; manual remediation is required before migration.');
             for (const [name,value] of [['NEON_RLS_TEST_TENANT_ID',process.env.NEON_RLS_TEST_TENANT_ID],['NEON_RLS_TEST_OUTLET_ID',process.env.NEON_RLS_TEST_OUTLET_ID]]) {
               if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || '')) throw new Error(name+' must be a UUID before migration.');
             }
