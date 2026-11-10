@@ -250,7 +250,16 @@ CREATE TABLE staff_sessions (
 );
 CREATE INDEX idx_staff_sessions_active ON staff_sessions(token_hash,expires_at) WHERE revoked_at IS NULL;
 
-CREATE FUNCTION reject_audit_log_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE TABLE auth_rate_limits (
+ scope_hash TEXT PRIMARY KEY CHECK(length(scope_hash)=64),
+ failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK(failed_attempts>=0),
+ window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ blocked_until TIMESTAMPTZ,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_auth_rate_limits_updated ON auth_rate_limits(updated_at);
+
+CREATE FUNCTION reject_audit_log_mutation() RETURNS trigger LANGUAGE plpgsql AS $
 BEGIN RAISE EXCEPTION 'audit_logs is append-only'; END;
 $$;
 CREATE TRIGGER trg_audit_logs_immutable BEFORE UPDATE OR DELETE ON audit_logs
@@ -292,5 +301,10 @@ BEGIN
  CREATE POLICY staff_bootstrap_insert ON staff_accounts FOR INSERT WITH CHECK (current_setting('app.bootstrap_mode',true)='true');
  ALTER TABLE staff_sessions ENABLE ROW LEVEL SECURITY; ALTER TABLE staff_sessions FORCE ROW LEVEL SECURITY;
  CREATE POLICY staff_session_token_only ON staff_sessions USING (token_hash=nullif(current_setting('app.session_token_hash',true),'')) WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid);
+ ALTER TABLE auth_rate_limits ENABLE ROW LEVEL SECURITY;
+ ALTER TABLE auth_rate_limits FORCE ROW LEVEL SECURITY;
+ CREATE POLICY auth_rate_limit_private ON auth_rate_limits
+   USING (current_setting('app.auth_rate_limit',true)='true')
+   WITH CHECK (current_setting('app.auth_rate_limit',true)='true');
 END $$;
 COMMIT;
