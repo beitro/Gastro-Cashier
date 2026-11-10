@@ -1,0 +1,85 @@
+name: PostgreSQL database safety
+on:
+  pull_request:
+    paths:
+      - 'schema.sql'
+      - 'db/migrations/**'
+      - 'scripts/db-*.mjs'
+      - 'package.json'
+      - '.github/workflows/database-safety.yml'
+  workflow_dispatch:
+jobs:
+  migration-and-rls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gastro_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gastro_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-package-lock
+      - name: Read-only inspect ephemeral database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: npm run db:check
+      - name: Apply guarded baseline
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+          CONFIRM_EMPTY_DATABASE_MIGRATION: YES
+        run: npm run db:migrate
+      - name: Verify incremental RLS hardening migration is repeatable
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: node --input-type=module -e "import {readFile} from 'node:fs/promises'; import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const sql=await readFile('db/migrations/002_rls_runtime_hardening.sql','utf8'); await c.query(sql); await c.query(sql); await c.end();"
+      - name: Verify staff administration migration is repeatable
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: node --input-type=module -e "import {readFile} from 'node:fs/promises'; import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const sql=await readFile('db/migrations/003_staff_admin_management.sql','utf8'); await c.query(sql); await c.query(sql); await c.end();"
+      - name: Seed an overprivileged pre-existing runtime role to test privilege cleanup
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d gastro_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE gastro_runtime LOGIN;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO gastro_runtime;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO gastro_runtime;
+          GRANT CREATE ON SCHEMA public TO gastro_runtime;
+          SQL
+      - name: Provision and verify least-privilege API role (ephemeral CI database)
+        env:
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+          RUNTIME_DB_PASSWORD: ci-runtime-password-with-more-than-24-characters
+        run: npm run db:provision-runtime-role
+      - name: Assert stale table, truncate and schema-create grants were revoked
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const c=new pg.Client({connectionString:'postgresql://postgres:postgres@localhost:5432/gastro_test'});
+          await c.connect();
+          const r=await c.query("SELECT has_table_privilege('gastro_runtime','public.audit_logs','DELETE') AS can_delete,has_table_privilege('gastro_runtime','public.audit_logs','TRUNCATE') AS can_truncate,has_schema_privilege('gastro_runtime','public','CREATE') AS can_create_objects");
+          await c.end();
+          if(r.rows[0].can_delete||r.rows[0].can_truncate||r.rows[0].can_create_objects) throw new Error('Runtime role retained excessive privileges.');
+          NODE
+      - name: Verify API runtime role can connect without bypassing RLS
+        env:
+          DATABASE_URL: postgresql://gastro_runtime:ci-runtime-password-with-more-than-24-characters@localhost:5432/gastro_test
+        run: node -e "import('pg').then(async ({default:pg})=>{const c=new pg.Client({connectionString:process.env.DATABASE_URL});await c.connect();const r=await c.query('select current_user, rolsuper, rolbypassrls from pg_roles where rolname=current_user');if(r.rows[0].rolsuper||r.rows[0].rolbypassrls)throw new Error('runtime role bypasses RLS');await c.end();})"
+      - name: Verify tenant isolation, outlet scope, idempotency and concurrency
+        timeout-minutes: 3
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+          DB_SAFETY_ALLOW_MUTATIONS: YES
+        run: node scripts/db-integration-safety.mjs

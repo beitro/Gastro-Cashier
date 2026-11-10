@@ -1,0 +1,21 @@
+name: Neon read-only connection check
+on:
+  pull_request:
+    paths:
+      - 'scripts/db-check.mjs'
+      - '.github/workflows/neon-readonly-check.yml'
+  workflow_dispatch:
+jobs:
+  inspect:
+    if: ${{ vars.ENABLE_NEON_READONLY_CHECK == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-package-lock
+      - name: Inspect configured Neon database (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: npm run db:check

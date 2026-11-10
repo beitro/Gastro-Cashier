@@ -1,0 +1,263 @@
+name: Neon production RLS deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_deployment:
+        description: Type DEPLOY to authorize backup preparation and the gated deployment
+        required: true
+        type: choice
+        options:
+          - NO
+          - DEPLOY
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neon-production-rls-deployment
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: ${{ inputs.confirm_production_deployment == 'DEPLOY' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      restore-db:
+        image: postgres:18
+        env:
+          POSTGRES_USER: restore
+          POSTGRES_PASSWORD: restore-only-ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U restore -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+      NEON_EXPECTED_HOST: ${{ secrets.NEON_EXPECTED_HOST }}
+      NEON_EXPECTED_DATABASE: ${{ secrets.NEON_EXPECTED_DATABASE }}
+      NEON_BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate backup credentials and exact Neon identity (read-only)
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL"
+          test -n "$NEON_EXPECTED_HOST"
+          test -n "$NEON_EXPECTED_DATABASE"
+          test -n "$NEON_BACKUP_PASSPHRASE"
+          test "${#NEON_BACKUP_PASSPHRASE}" -ge 32
+          npm install --no-save --no-package-lock --ignore-scripts pg@^8.16.3
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const u = new URL(process.env.DATABASE_URL);
+          if (u.hostname !== process.env.NEON_EXPECTED_HOST) throw new Error('Database host does not match NEON_EXPECTED_HOST.');
+          if (decodeURIComponent(u.pathname.slice(1)) !== process.env.NEON_EXPECTED_DATABASE) throw new Error('Database name does not match NEON_EXPECTED_DATABASE.');
+          if (!u.hostname.endsWith('.neon.tech')) throw new Error('Target host is not a Neon endpoint.');
+          const c = new pg.Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:10000});
+          try {
+            await c.connect();
+            const r=await c.query("SELECT current_database() AS db,current_user AS role,current_setting('server_version') AS version");
+            if(r.rows[0].db!==process.env.NEON_EXPECTED_DATABASE) throw new Error('Connected database identity mismatch.');
+            console.log(JSON.stringify({targetHost:u.hostname,database:r.rows[0].db,serverVersion:r.rows[0].version,connectedRole:r.rows[0].role}));
+          } finally { await c.end(); }
+          NODE
+      - name: Create, encrypt and fully restore-verify pre-migration backup
+        id: backup
+        run: |
+          set -euo pipefail
+          mkdir -p backup
+          chmod 700 backup
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" --file=/work/backup/neon-pre-migration.dump'
+          test -s backup/neon-pre-migration.dump
+          (cd backup && sha256sum neon-pre-migration.dump > SHA256SUMS)
+          printf '%s' "$NEON_BACKUP_PASSPHRASE" > "$RUNNER_TEMP/neon-backup.pass"
+          chmod 600 "$RUNNER_TEMP/neon-backup.pass"
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/neon-backup.pass" \
+            --symmetric --cipher-algo AES256 --output backup/neon-pre-migration.dump.gpg backup/neon-pre-migration.dump
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/neon-backup.pass" \
+            --decrypt --output backup/backup-verification.dump backup/neon-pre-migration.dump.gpg
+          cmp backup/neon-pre-migration.dump backup/backup-verification.dump
+          docker run --rm -v "$PWD:/work" -w /work postgres:18-alpine \
+            pg_restore --list /work/backup/backup-verification.dump > backup/restore-list.txt
+          test -s backup/restore-list.txt
+          docker run --rm --network host -e PGPASSWORD=restore-only-ci postgres:18-alpine \
+            createdb -h 127.0.0.1 -U restore -T template0 restore_verify
+          docker run --rm --network host -v "$PWD:/work" -w /work postgres:18-alpine \
+            pg_restore --exit-on-error --no-owner --no-acl --dbname=postgresql://restore:restore-only-ci@127.0.0.1:5432/restore_verify \
+            /work/backup/backup-verification.dump
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+          rm -f backup/neon-pre-migration.dump backup/backup-verification.dump "$RUNNER_TEMP/neon-backup.pass"
+      - name: Store encrypted verified backup artifact
+        if: steps.backup.outputs.verified == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-pre-migration-backup-${{ github.run_id }}
+          path: |
+            backup/neon-pre-migration.dump.gpg
+            backup/SHA256SUMS
+          retention-days: 30
+          if-no-files-found: error
+
+  deploy:
+    needs: backup
+    if: ${{ needs.backup.result == 'success' && inputs.confirm_production_deployment == 'DEPLOY' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # This job pauses here until a required reviewer approves the neon-production Environment.
+    environment:
+      name: neon-production
+    env:
+      NEON_ADMIN_DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+      NEON_EXPECTED_HOST: ${{ secrets.NEON_EXPECTED_HOST }}
+      NEON_EXPECTED_DATABASE: ${{ secrets.NEON_EXPECTED_DATABASE }}
+      NEON_BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
+      NEON_RUNTIME_DB_PASSWORD: ${{ secrets.NEON_RUNTIME_DB_PASSWORD }}
+      NEON_RUNTIME_DB_ROLE: gastro_runtime
+      NEON_RLS_TEST_TENANT_ID: ${{ secrets.NEON_RLS_TEST_TENANT_ID }}
+      NEON_RLS_TEST_OUTLET_ID: ${{ secrets.NEON_RLS_TEST_OUTLET_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download backup created by prerequisite job
+        uses: actions/download-artifact@v4
+        with:
+          name: neon-pre-migration-backup-${{ github.run_id }}
+          path: backup
+      - name: Re-verify encrypted backup before any database write
+        run: |
+          set -euo pipefail
+          test -s backup/neon-pre-migration.dump.gpg
+          test -s backup/SHA256SUMS
+          printf '%s' "$NEON_BACKUP_PASSPHRASE" > "$RUNNER_TEMP/neon-backup.pass"
+          chmod 600 "$RUNNER_TEMP/neon-backup.pass"
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/neon-backup.pass" \
+            --decrypt --output backup/neon-pre-migration.dump backup/neon-pre-migration.dump.gpg
+          (cd backup && sha256sum --check SHA256SUMS)
+          rm -f backup/neon-pre-migration.dump "$RUNNER_TEMP/neon-backup.pass"
+      - name: Validate secrets and exact Neon target identity (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL"
+          test -n "$NEON_EXPECTED_HOST"
+          test -n "$NEON_EXPECTED_DATABASE"
+          test -n "$NEON_RUNTIME_DB_PASSWORD"
+          test "${#NEON_RUNTIME_DB_PASSWORD}" -ge 24
+          test -n "$NEON_RLS_TEST_TENANT_ID"
+          test -n "$NEON_RLS_TEST_OUTLET_ID"
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const u = new URL(process.env.DATABASE_URL);
+          if (u.hostname !== process.env.NEON_EXPECTED_HOST) throw new Error('Database host does not match NEON_EXPECTED_HOST.');
+          if (decodeURIComponent(u.pathname.slice(1)) !== process.env.NEON_EXPECTED_DATABASE) throw new Error('Database name does not match NEON_EXPECTED_DATABASE.');
+          if (!u.hostname.endsWith('.neon.tech')) throw new Error('Target host is not a Neon endpoint.');
+          const c = new pg.Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:10000});
+          try {
+            await c.connect();
+            const r=await c.query("SELECT current_database() AS db,current_user AS role,current_setting('server_version') AS version");
+            if(r.rows[0].db!==process.env.NEON_EXPECTED_DATABASE) throw new Error('Connected database identity mismatch.');
+            console.log(JSON.stringify({targetHost:u.hostname,database:r.rows[0].db,serverVersion:r.rows[0].version,connectedRole:r.rows[0].role}));
+          } finally { await c.end(); }
+          NODE
+      - name: Validate schema ownership and migration prerequisites (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const c=new pg.Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:10000});
+          const required=['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','tenant_settings','outlet_settings','menu_categories','menu_items','modifier_groups','modifier_options','dining_tables','reservations','dining_sessions','recipes','recipe_lines','inventory_items','inventory_movements','order_batches','order_items','order_item_modifiers','payments','payment_allocations','audit_logs','outbox_events','idempotency_keys','v_table_board'];
+          try {
+            await c.connect();
+            const m=(await c.query("SELECT current_user AS role,current_database() AS db,r.rolsuper,r.rolcreaterole,n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=current_user) AS owns_schema FROM pg_roles r JOIN pg_namespace n ON n.nspname='public' WHERE r.rolname=current_user")).rows[0];
+            if(!m || m.db!==process.env.NEON_EXPECTED_DATABASE || m.rolsuper || !m.rolcreaterole || !m.owns_schema) throw new Error('Admin role must match target, own public schema, have CREATEROLE, and not be superuser.');
+            const t=await c.query("SELECT c.relname,pg_get_userbyid(c.relowner)=current_user AS owned FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname=ANY($1::text[]) AND c.relkind IN ('r','p','v')",[[...required,'staff_sessions']]);
+            const found=new Set(t.rows.map(x=>x.relname));
+            const missing=required.filter(x=>!found.has(x));
+            if(missing.length) throw new Error('Expected application relations missing: '+missing.join(', '));
+            const unowned=t.rows.filter(x=>!x.owned).map(x=>x.relname);
+            if(unowned.length) throw new Error('Admin role does not own required application relations: '+unowned.join(', '));
+            const existingRole=await c.query(`SELECT r.rolsuper,
+              EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m','S') AND x.relowner=r.oid) AS owns_objects,
+              EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND nspowner=r.oid) AS owns_schema,
+              EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships,
+              has_schema_privilege(r.rolname,'public','CREATE') AS can_create_schema_objects,
+              has_database_privilege(r.rolname,current_database(),'CREATE') AS can_create_schemas
+              FROM pg_roles r WHERE r.rolname='gastro_runtime'`);
+            if(existingRole.rowCount && (existingRole.rows[0].rolsuper || existingRole.rows[0].owns_objects || existingRole.rows[0].owns_schema || existingRole.rows[0].has_memberships || existingRole.rows[0].can_create_schema_objects || existingRole.rows[0].can_create_schemas)) throw new Error('Existing gastro_runtime role has privileged attributes, ownership, or memberships; manual remediation is required before migration.');
+            for (const [name,value] of [['NEON_RLS_TEST_TENANT_ID',process.env.NEON_RLS_TEST_TENANT_ID],['NEON_RLS_TEST_OUTLET_ID',process.env.NEON_RLS_TEST_OUTLET_ID]]) {
+              if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || '')) throw new Error(name+' must be a UUID before migration.');
+            }
+            await c.query('BEGIN READ ONLY');
+            try {
+              await c.query("SELECT set_config('app.bootstrap_mode','true',true)");
+              const fixture=await c.query("SELECT 1 FROM tenants t JOIN outlets o ON o.tenant_id=t.id WHERE t.id=$1::uuid AND o.id=$2::uuid AND t.status='active' AND o.status='active' AND EXISTS (SELECT 1 FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=t.id WHERE a.status='active' AND tm.status='active')",[process.env.NEON_RLS_TEST_TENANT_ID,process.env.NEON_RLS_TEST_OUTLET_ID]);
+              if (fixture.rowCount !== 1) throw new Error('Configured RLS test tenant/outlet must exist, be active, and have active staff before migration.');
+            } finally { await c.query('ROLLBACK'); }
+            const version=await c.query("SELECT current_setting('server_version_num')::int AS n");
+            if(version.rows[0].n<150000) throw new Error('PostgreSQL 15+ required.');
+            console.log(JSON.stringify({prerequisites:'passed',database:m.db,adminRole:m.role,requiredRelations:required.length,rlsFixture:'verified-before-migration',serverVersionNumber:version.rows[0].n}));
+          } finally { await c.end(); }
+          NODE
+      - name: Create persistent staff sessions table (idempotent prerequisite)
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_staff_sessions.sql'
+      - name: Apply incremental RLS hardening migration 002
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_rls_runtime_hardening.sql'
+      - name: Apply owner-scoped staff administration migration 003
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/003_staff_admin_management.sql'
+      - name: Provision least-privilege gastro_runtime role
+        env:
+          ADMIN_DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+          RUNTIME_DB_PASSWORD: ${{ secrets.NEON_RUNTIME_DB_PASSWORD }}
+          RUNTIME_DB_ROLE: gastro_runtime
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts pg@^8.16.3
+          npm run db:provision-runtime-role
+      - name: Build runtime-only connection string without logging credentials
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const u=new URL(process.env.NEON_ADMIN_DATABASE_URL);
+          u.username=process.env.NEON_RUNTIME_DB_ROLE;
+          u.password=process.env.NEON_RUNTIME_DB_PASSWORD;
+          const fs=await import('node:fs');
+          fs.appendFileSync(process.env.GITHUB_ENV,'DATABASE_URL='+u.toString()+'\n',{mode:0o600});
+          NODE
+      - name: Verify RLS through the actual gastro_runtime login (read-only)
+        env:
+          NEON_RUNTIME_DB_ROLE: gastro_runtime
+          NEON_RLS_TEST_TENANT_ID: ${{ secrets.NEON_RLS_TEST_TENANT_ID }}
+          NEON_RLS_TEST_OUTLET_ID: ${{ secrets.NEON_RLS_TEST_OUTLET_ID }}
+        run: |
+          set -euo pipefail
+          node scripts/db-runtime-rls-verify.mjs
