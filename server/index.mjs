@@ -240,7 +240,7 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
       if(owners.rows[0].count<=1)return {status:409,error:'Tidak bisa menurunkan/nonaktifkan satu-satunya Owner aktif di outlet.'};
     }
     if(role!==undefined){await c.query('UPDATE tenant_memberships SET role_code=$1 WHERE id=$2',[role,old.id]);await c.query('UPDATE outlet_memberships SET role_code=$1 WHERE tenant_id=$2 AND outlet_id=$3 AND tenant_membership_id=$4',[role,req.auth.tenant_id,req.auth.outlet_id,old.id]);}
-    if(status!==undefined){await c.query('UPDATE staff_accounts SET status=$1 WHERE id=$2',[status,req.params.staffId]);await c.query('UPDATE tenant_memberships SET status=$1 WHERE id=$2',[status,old.id]);}
+    if(status!==undefined){await c.query('UPDATE staff_accounts SET status=$1 WHERE id=$2',[status,req.params.staffId]);await c.query('UPDATE tenant_memberships SET status=$1 WHERE id=$2',[status,old.id]);if(status!=='active')await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND outlet_id=$2 AND staff_id=$3 AND revoked_at IS NULL',[req.auth.tenant_id,req.auth.outlet_id,req.params.staffId]);}
     return {status:200};
   });
   if(result.status!==200)return res.status(result.status).json({error:result.error});
