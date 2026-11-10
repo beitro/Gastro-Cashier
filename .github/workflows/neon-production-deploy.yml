@@ -191,6 +191,12 @@ jobs:
             if(missing.length) throw new Error('Expected application relations missing: '+missing.join(', '));
             const unowned=t.rows.filter(x=>!x.owned).map(x=>x.relname);
             if(unowned.length) throw new Error('Admin role does not own required application relations: '+unowned.join(', '));
+            const existingRole=await c.query(`SELECT r.rolsuper,
+              EXISTS(SELECT 1 FROM pg_class x JOIN pg_namespace n ON n.oid=x.relnamespace WHERE n.nspname='public' AND x.relkind IN ('r','p','v','m') AND x.relowner=r.oid) AS owns_objects,
+              EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND nspowner=r.oid) AS owns_schema,
+              EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships
+              FROM pg_roles r WHERE r.rolname='gastro_runtime'`);
+            if(existingRole.rowCount && (existingRole.rows[0].rolsuper || existingRole.rows[0].owns_objects || existingRole.rows[0].owns_schema || existingRole.rows[0].has_memberships)) throw new Error('Existing gastro_runtime role has privileged attributes, ownership, or memberships; manual remediation is required before migration.');
             const version=await c.query("SELECT current_setting('server_version_num')::int AS n");
             if(version.rows[0].n<150000) throw new Error('PostgreSQL 15+ required.');
             console.log(JSON.stringify({prerequisites:'passed',database:m.db,adminRole:m.role,requiredRelations:required.length,serverVersionNumber:version.rows[0].n}));
