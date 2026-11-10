@@ -170,11 +170,17 @@ export async function submitApiOrder(sessionId: string, items: OrderItem[], menu
 }
 
 export async function settleApiSession(sessionId: string, method: 'cash' | 'qris' | 'card' | 'transfer', discountAmount: number, cashReceived?: number, cardBank?: string): Promise<ApiRow> {
-  const idempotencyKey = ['pos', sessionId, method, Number(discountAmount), method === 'cash' ? Number(cashReceived || 0) : 0].join('-');
-  return request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/payments', {
+  const fingerprint=[method,Number(discountAmount),method==='cash'?Number(cashReceived||0):0,cardBank||''].join(':');
+  const storageKey='gastro_payment_idem:'+sessionId+':'+encodeURIComponent(fingerprint);
+  const store=typeof window!=='undefined'?window.sessionStorage:null;
+  const idempotencyKey=store?.getItem(storageKey)||('payment-'+crypto.randomUUID());
+  store?.setItem(storageKey,idempotencyKey);
+  const result=await request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/payments', {
     method: 'POST',
     body: JSON.stringify({ method, discountAmount, cashReceived: method === 'cash' ? cashReceived : undefined, cardBank, idempotencyKey }),
   });
+  store?.removeItem(storageKey);
+  return result;
 }
 
 export async function cancelApiOrderItem(itemId: string): Promise<ApiRow> {
