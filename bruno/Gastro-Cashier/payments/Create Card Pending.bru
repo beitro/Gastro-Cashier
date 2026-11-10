@@ -1,0 +1,25 @@
+meta {
+  name: Create Card Pending
+  type: http
+  seq: 6
+}
+post {
+  url: {{baseUrl}}/api/sessions/{{sessionId}}/payments
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{cashierToken}}
+}
+body:json {
+  method: "card",
+  cardBank: "BCA EDC",
+  discountAmount: 0,
+  idempotencyKey: "audit-card-001"
+}
+script:post-response {
+  test("card payment stays pending until authorized confirmation", function() {
+    expect(res.body.status).to.equal("pending");
+    expect(res.body.paid_at).to.equal(null);
+  });
+}
