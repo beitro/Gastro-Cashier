@@ -155,9 +155,18 @@ export async function submitApiOrder(sessionId: string, items: OrderItem[], menu
     if (!menuItemId) throw new Error('SKU menu ' + item.menuItemId + ' tidak ditemukan di katalog API. Pesanan tidak dikirim.');
     return { menuItemId, quantity: item.quantity, notes: item.notes || '' };
   });
-  return request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/orders', {
-    method: 'POST', body: JSON.stringify({ items: payload, idempotencyKey: 'order-' + crypto.randomUUID() }),
+  const fingerprint=JSON.stringify(payload);
+  let hash=2166136261;
+  for(let i=0;i<fingerprint.length;i++) hash=Math.imul(hash^fingerprint.charCodeAt(i),16777619);
+  const storageKey='gastro_order_idem:'+sessionId+':'+(hash>>>0).toString(36);
+  const store=typeof window!=='undefined'?window.sessionStorage:null;
+  const idempotencyKey=store?.getItem(storageKey)||('order-'+crypto.randomUUID());
+  store?.setItem(storageKey,idempotencyKey);
+  const result=await request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/orders', {
+    method: 'POST', body: JSON.stringify({ items: payload, idempotencyKey }),
   });
+  store?.removeItem(storageKey);
+  return result;
 }
 
 export async function settleApiSession(sessionId: string, method: 'cash' | 'qris' | 'card' | 'transfer', discountAmount: number, cashReceived?: number, cardBank?: string): Promise<ApiRow> {
