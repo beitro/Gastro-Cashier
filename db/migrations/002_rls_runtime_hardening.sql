@@ -1,6 +1,14 @@
 -- Incremental RLS hardening for an existing Gastro-Cashier database.
 -- Run as the schema owner after backup and target verification. This does not migrate data.
-BEGIN;
+BEGIN;CREATE TABLE IF NOT EXISTS public.auth_rate_limits (
+ scope_hash TEXT PRIMARY KEY CHECK(length(scope_hash)=64),
+ failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK(failed_attempts>=0),
+ window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ blocked_until TIMESTAMPTZ,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_updated ON public.auth_rate_limits(updated_at);
+
 ALTER VIEW public.v_table_board SET (security_invoker = true);
 DO $$ DECLARE tbl TEXT; BEGIN
  FOREACH tbl IN ARRAY ARRAY['outlet_memberships','outlet_settings','dining_tables','reservations','dining_sessions','menu_items','recipes','inventory_items','order_batches','payments','order_items','order_item_modifiers','payment_allocations','inventory_movements','audit_logs','outbox_events','idempotency_keys'] LOOP EXECUTE format('DROP POLICY IF EXISTS tenant_outlet_isolation ON %I',tbl); END LOOP;
@@ -43,5 +51,11 @@ BEGIN
  CREATE POLICY staff_bootstrap_insert ON staff_accounts FOR INSERT WITH CHECK (current_setting('app.bootstrap_mode',true)='true');
  ALTER TABLE staff_sessions ENABLE ROW LEVEL SECURITY; ALTER TABLE staff_sessions FORCE ROW LEVEL SECURITY;
  CREATE POLICY staff_session_token_only ON staff_sessions USING (token_hash=nullif(current_setting('app.session_token_hash',true),'')) WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid);
+ ALTER TABLE auth_rate_limits ENABLE ROW LEVEL SECURITY;
+ ALTER TABLE auth_rate_limits FORCE ROW LEVEL SECURITY;
+ DROP POLICY IF EXISTS auth_rate_limit_private ON auth_rate_limits;
+ CREATE POLICY auth_rate_limit_private ON auth_rate_limits
+   USING (current_setting('app.auth_rate_limit',true)='true')
+   WITH CHECK (current_setting('app.auth_rate_limit',true)='true');
 END $$;
 COMMIT;
