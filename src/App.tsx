@@ -37,6 +37,7 @@ import { LoginModal } from './components/LoginModal';
 import { FinanceView } from './components/FinanceView';
 import { OwnerDashboardView } from './components/OwnerDashboardView';
 import { MenuStockControl, CancellationRequest } from './components/MenuStockControl';
+import { StaffAdminView } from './components/StaffAdminView';
 
 const STORAGE_KEY_TABLES = 'resto_pos_tables_v1';
 const STORAGE_KEY_TRANSACTIONS = 'resto_pos_tx_v1';
@@ -1292,7 +1293,9 @@ export default function App() {
 
       {/* Main Dynamic View: Owner Dashboard, Finance Workspace, or Cashier Floor Plan */}
       <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        {activeTab === 'owner' && currentStaff?.role === 'owner' ? (
+        {activeTab === 'admin' && currentStaff?.role === 'owner' ? (
+          <StaffAdminView currentStaff={currentStaff} onLockScreen={handleLockScreen} />
+        ) : activeTab === 'owner' && currentStaff?.role === 'owner' ? (
           <OwnerDashboardView
             currentStaff={currentStaff}
             tables={tables}
