@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Users, ShieldCheck, UserPlus, Radio, RefreshCw, Save, UserX, UserCheck, AlertTriangle } from 'lucide-react';
 import { StaffAccount } from '../types/pos';
 
-type AdminStaff = { id:string; display_name:string; email:string|null; role_code:string; status:string; has_pin:boolean; has_nfc:boolean; created_at:string };
+type AdminStaff = { id:string; display_name:string; email:string|null; phone:string|null; role_code:string; status:string; has_pin:boolean; has_nfc:boolean; created_at:string };
 type Tab = 'staff' | 'matrix';
 const API='/api/admin/staff';
 const roles = [
@@ -29,6 +29,7 @@ export const StaffAdminView: React.FC<{ currentStaff:StaffAccount; onLockScreen:
   const [saving,setSaving]=useState(false);
   const [name,setName]=useState('');
   const [email,setEmail]=useState('');
+  const [phone,setPhone]=useState('');
   const [role,setRole]=useState('cashier');
   const [pin,setPin]=useState('');
   const [selected,setSelected]=useState<AdminStaff|null>(null);
@@ -45,9 +46,9 @@ export const StaffAdminView: React.FC<{ currentStaff:StaffAccount; onLockScreen:
   const submitNew=async(e:React.FormEvent)=>{
     e.preventDefault();setSaving(true);setError('');setNotice('');
     try{
-      const r=await fetch(API,{method:'POST',headers:authHeaders(),body:JSON.stringify({name,email:email||null,role,pin})});
+      const r=await fetch(API,{method:'POST',headers:authHeaders(),body:JSON.stringify({name,email:email||null,phone:phone||null,role,pin})});
       const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal membuat staff.');
-      setName('');setEmail('');setPin('');setRole('cashier');setNotice('Staff berhasil dibuat. PIN hanya ditampilkan saat pembuatan dan tidak disimpan di browser.');
+      setName('');setEmail('');setPhone('');setPin('');setRole('cashier');setNotice('Staff berhasil dibuat. PIN hanya ditampilkan saat pembuatan dan tidak disimpan di browser.');
       await load();
     }catch(e){setError(e instanceof Error?e.message:'Gagal membuat staff.');}
     finally{setSaving(false);}
@@ -84,12 +85,14 @@ export const StaffAdminView: React.FC<{ currentStaff:StaffAccount; onLockScreen:
     {tab==='staff'?<div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)] gap-4">
       <section className="clay-panel p-4 space-y-3">
         <div className="flex items-center justify-between"><h3 className="font-black text-slate-900">Daftar Staff ({staff.length})</h3><button onClick={()=>void load()} className="clay-btn-neutral px-3 py-2 text-xs font-bold"><RefreshCw className="inline w-3.5 h-3.5 mr-1"/> Refresh</button></div>
-        {loading?<p className="text-sm text-slate-500 p-4">Memuat data staff…</p>:staff.length===0?<p className="text-sm text-slate-500 p-4">Belum ada staff pada outlet ini.</p>:<div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-[10px] text-slate-500 uppercase border-b"><th className="p-2">Nama</th><th className="p-2">Role</th><th className="p-2">Credential</th><th className="p-2">Status</th><th className="p-2">Aksi</th></tr></thead><tbody>{staff.map(s=><tr key={s.id} className="border-b border-slate-200"><td className="p-2"><b>{s.display_name}</b><div className="text-[11px] text-slate-500">{s.email||'—'}</div></td><td className="p-2 capitalize">{s.role_code}</td><td className="p-2 text-xs">{s.has_pin?'PIN ✓':'PIN —'} · {s.has_nfc?'NFC ✓':'NFC —'}</td><td className="p-2"><span className={s.status==='active'?'text-emerald-700':'text-rose-700'}>{s.status}</span></td><td className="p-2"><button onClick={()=>{setSelected(s);setNewPin('');setNfcUid('');}} className="clay-btn-neutral px-3 py-1.5 text-xs font-bold">Kelola</button></td></tr>)}</tbody></table></div>}
+        {loading?<p className="text-sm text-slate-500 p-4">Memuat data staff…</p>:staff.length===0?<p className="text-sm text-slate-500 p-4">Belum ada staff pada outlet ini.</p>:<div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-[10px] text-slate-500 uppercase border-b"><th className="p-2">Nama</th><th className="p-2">Role</th><th className="p-2">Credential</th><th className="p-2">Status</th><th className="p-2">Aksi</th></tr></thead><tbody>{staff.map(s=><tr key={s.id} className="border-b border-slate-200"><td className="p-2"><b>{s.display_name}</b><div className="text-[11px] text-slate-500">{s.email||s.phone||'—'}</div></td><td className="p-2 capitalize">{s.role_code}</td><td className="p-2 text-xs">{s.has_pin?'PIN ✓':'PIN —'} · {s.has_nfc?'NFC ✓':'NFC —'}</td><td className="p-2"><span className={s.status==='active'?'text-emerald-700':'text-rose-700'}>{s.status}</span></td><td className="p-2"><button onClick={()=>{setSelected(s);setNewPin('');setNfcUid('');}} className="clay-btn-neutral px-3 py-1.5 text-xs font-bold">Kelola</button></td></tr>)}</tbody></table></div>}
       </section>
       <section className="clay-panel p-4 space-y-3"><div className="flex items-center gap-2"><UserPlus className="w-5 h-5 text-emerald-700"/><h3 className="font-black">Tambah Staff</h3></div>
         <form onSubmit={submitNew} className="space-y-3">
           <label className="block text-xs font-bold">Nama lengkap<input required value={name} onChange={e=>setName(e.target.value)} className="mt-1 w-full clay-well rounded-xl p-3 text-sm" maxLength={120}/></label>
           <label className="block text-xs font-bold">Email (opsional)<input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="mt-1 w-full clay-well rounded-xl p-3 text-sm"/></label>
+          <label className="block text-xs font-bold">Nomor telepon (opsional)<input type="tel" value={phone} onChange={e=>setPhone(e.target.value)} className="mt-1 w-full clay-well rounded-xl p-3 text-sm" maxLength={40}/></label>
+          <p className="text-[11px] text-slate-500">Isi email atau nomor telepon sebagai kontak akun.</p>
           <label className="block text-xs font-bold">Role<select value={role} onChange={e=>setRole(e.target.value)} className="mt-1 w-full clay-well rounded-xl p-3 text-sm">{roles.map(r=><option key={r.code} value={r.code}>{r.label}</option>)}</select></label>
           <label className="block text-xs font-bold">PIN awal (4–8 digit)<input required inputMode="numeric" pattern="[0-9]{4,8}" minLength={4} maxLength={8} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').slice(0,8))} className="mt-1 w-full clay-well rounded-xl p-3 text-sm font-mono tracking-widest"/></label>
           <button disabled={saving} className="clay-btn-emerald text-white rounded-xl px-4 py-3 w-full text-sm font-black disabled:opacity-50"><UserPlus className="inline w-4 h-4 mr-2"/> Buat akun staff</button>
