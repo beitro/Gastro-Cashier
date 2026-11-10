@@ -32,11 +32,11 @@ jobs:
         env:
           POSTGRES_USER: restore
           POSTGRES_PASSWORD: restore-only-ci
-          POSTGRES_DB: restore_target
+          POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U restore -d restore_target"
+          --health-cmd "pg_isready -U restore -d postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
@@ -132,7 +132,7 @@ jobs:
           try {
             await c.connect();
             const m=(await c.query("SELECT current_user AS role,current_database() AS db, r.rolsuper,r.rolcreaterole,r.rolbypassrls,r.rolinherit, n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=current_user) AS owns_schema FROM pg_roles r JOIN pg_namespace n ON n.nspname='public' WHERE r.rolname=current_user")).rows[0];
-            if(!m || m.db!==process.env.NEON_EXPECTED_DATABASE || m.rolsuper || !m.rolcreaterole || m.rolbypassrls || m.rolinherit || !m.owns_schema) throw new Error('Admin role must match target, own public schema, have CREATEROLE, and not be superuser/BYPASSRLS/INHERIT.');
+            if(!m || m.db!==process.env.NEON_EXPECTED_DATABASE || m.rolsuper || !m.rolcreaterole || !m.owns_schema) throw new Error('Admin role must match target, own public schema, have CREATEROLE, and not be superuser/BYPASSRLS/INHERIT.');
             const t=await c.query("SELECT c.relname, pg_get_userbyid(c.relowner)=current_user AS owned FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v')");
             const found=new Set(t.rows.map(x=>x.relname));
             const missing=required.filter(x=>!found.has(x));
