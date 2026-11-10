@@ -76,10 +76,10 @@ CREATE POLICY tenant_outlet_isolation ON public.menu_stock_movements
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='gastro_runtime') THEN
-    GRANT SELECT, INSERT, UPDATE ON public.menu_stock TO gastro_runtime;
-    GRANT SELECT, INSERT ON public.menu_stock_movements TO gastro_runtime;
-    GRANT SELECT, INSERT, UPDATE ON public.idempotency_keys TO gastro_runtime;
-    GRANT UPDATE ON public.order_batches, public.payments TO gastro_runtime;
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.menu_stock TO gastro_runtime';
+    EXECUTE 'GRANT SELECT, INSERT ON public.menu_stock_movements TO gastro_runtime';
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE ON public.idempotency_keys TO gastro_runtime';
+    EXECUTE 'GRANT UPDATE ON public.order_batches, public.payments TO gastro_runtime';
   END IF;
 END $$;
 
