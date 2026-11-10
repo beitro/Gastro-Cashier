@@ -12,7 +12,7 @@ auth:bearer {
   token: {{cashierToken}}
 }
 body:json {
-  tableId: {{tableId}},
+  tableId: "{{tableId}}",
   guestCount: 2
 }
 script:post-response {
