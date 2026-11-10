@@ -255,7 +255,7 @@ app.use('/api/admin/staff', (req,res,next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   return res.status(423).json({ error:'Administrasi staff sementara read-only selama emergency release POS.', code:'STAFF_ADMIN_READ_ONLY' });
 });
-const ADMIN_ROLES=['owner','cashier','finance'];
+const ADMIN_ROLES=['owner','manager','cashier','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
