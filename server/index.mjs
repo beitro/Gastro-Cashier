@@ -205,7 +205,7 @@ async function scoped(req, fn) {
 
 async function adminScoped(req,fn) {
   return transaction(async c=>{
-    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true),set_config('app.staff_admin','true',true)",[req.auth.tenant_id,req.auth.outlet_id]);
+    await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true),set_config('app.staff_admin','true',true),set_config('app.actor_staff_id',$3,true)",[req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id]);
     return fn(c);
   });
 }
@@ -215,7 +215,7 @@ app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>
     (a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at
     FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1
     JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2
-    WHERE tm.status='active' OR a.status<>'active'
+    WHERE (tm.status='active' AND om.status='active') OR a.status<>'active'
     ORDER BY a.display_name`,[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
@@ -262,7 +262,7 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
   if(uid!==null&&(!uid||uid.length>200))return res.status(400).json({error:'NFC UID tidak valid.'});
   const pinHash=pin===null?null:await hashCredential(pin),nfcHash=uid===null?null:await hashCredential(uid);
   const result=await adminScoped(req,async c=>{
-    const member=await c.query('SELECT id FROM tenant_memberships WHERE tenant_id=$1 AND staff_id=$2',[req.auth.tenant_id,req.params.staffId]);
+    const member=await c.query('SELECT tm.id FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id WHERE tm.tenant_id=$1 AND tm.staff_id=$2 AND om.outlet_id=$3',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
     if(!member.rowCount)return false;
     const sets=[],values=[req.params.staffId];if(pinHash){values.push(pinHash);sets.push('pin_hash=app.get('/api/menu', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT m.id,m.sku,m.name,m.description,m.destination,m.price,m.cost_price,m.image_url,m.category_id,c.name AS category_name
