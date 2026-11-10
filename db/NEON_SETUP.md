@@ -20,6 +20,8 @@ Keep the key in the API hosting provider's server-only environment and in the da
 
 The gated Neon deployment workflow now applies migration 004, provisions the matching private signing key, and verifies signed-context isolation after the backup and human approval gate. It does not modify application hosting secrets or restart the API. No migration or key provisioning is automatic.
 
+**Required coordinated cutover:** this migration intentionally stops trusting legacy GUCs, so old API instances will fail closed after it is applied. Before dispatching the workflow, put the POS/API into a maintenance window or block application traffic, deploy the API version containing the signed-context code with `RLS_CONTEXT_HMAC_SECRET` set to the same value as `NEON_RLS_CONTEXT_HMAC_SECRET`, then run the gated database migration and verification. Reopen traffic only after the workflow succeeds and the API health/auth/POS smoke tests pass. Do not run the migration while old API instances are still serving requests.
+
 ## Read-only inspection
 
 Set the server-only Neon connection string as `DATABASE_URL` and run:
