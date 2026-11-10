@@ -31,6 +31,8 @@ DECLARE
   secret_bytes BYTEA;
   claims JSONB;
   now_epoch BIGINT;
+  signature_diff INTEGER := 0;
+  byte_index INTEGER;
 BEGIN
   token := current_setting('app.context_token', TRUE);
   IF token IS NULL OR length(token) > 8192 OR length(token) < 20 THEN
@@ -57,7 +59,13 @@ BEGIN
     RETURN NULL;
   END IF;
   expected_signature := public.hmac(payload_bytes, secret_bytes, 'sha256');
-  IF expected_signature IS DISTINCT FROM supplied_signature THEN
+  IF octet_length(supplied_signature) <> 32 THEN
+    RETURN NULL;
+  END IF;
+  FOR byte_index IN 0..31 LOOP
+    signature_diff := signature_diff | (get_byte(expected_signature, byte_index) # get_byte(supplied_signature, byte_index));
+  END LOOP;
+  IF signature_diff <> 0 THEN
     RETURN NULL;
   END IF;
 
