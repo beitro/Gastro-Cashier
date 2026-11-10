@@ -63,8 +63,8 @@ BEGIN
 
   claims := convert_from(payload_bytes, 'UTF8')::JSONB;
   now_epoch := floor(extract(epoch FROM statement_timestamp()))::BIGINT;
-  IF claims->>'v' <> '1'
-     OR jsonb_typeof(claims->'capabilities') <> 'array'
+  IF claims->>'v' IS DISTINCT FROM '1'
+     OR jsonb_typeof(claims->'capabilities') IS DISTINCT FROM 'array'
      OR COALESCE(claims->>'jti', '') = ''
      OR COALESCE((claims->>'iat')::BIGINT, 0) > now_epoch + 30
      OR COALESCE((claims->>'exp')::BIGINT, 0) <= now_epoch
