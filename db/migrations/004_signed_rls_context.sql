@@ -253,10 +253,10 @@ BEGIN
   FOREACH tbl IN ARRAY ARRAY['tenant_settings','menu_categories','modifier_groups','modifier_options','recipe_lines'] LOOP
     EXECUTE format(
       'CREATE POLICY tenant_isolation ON public.%I USING (
-        app_private.rls_context()->'capabilities' ? 'tenant_scope'
+        app_private.rls_context()->''capabilities'' ? ''tenant_scope''
         AND tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
       ) WITH CHECK (
-        app_private.rls_context()->'capabilities' ? 'tenant_scope'
+        app_private.rls_context()->''capabilities'' ? ''tenant_scope''
         AND tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
       )', tbl
     );
