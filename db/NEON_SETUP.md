@@ -4,9 +4,21 @@ The repository contains a PostgreSQL-backed API foundation, guarded baseline sch
 
 ## Authentication abuse protection
 
-PIN and NFC authentication attempts are rate-limited in PostgreSQL by a SHA-256 hash of the client IP, shared across API instances: five attempts per 15-minute window are allowed, then the source is blocked for 30 seconds. Successful authentication resets the counter. The raw IP address is not stored. The ledger is protected by forced RLS and is only visible when the API sets the transaction-local `app.auth_rate_limit` context.
+PIN and NFC authentication attempts are rate-limited in PostgreSQL by a SHA-256 hash of the client IP, shared across API instances: five attempts per 15-minute window are allowed, then the source is blocked for 30 seconds. Successful authentication resets the counter. The raw IP address is not stored. The ledger is protected by forced RLS and is only visible with a signed `auth_rate_limit` capability. All request authorization context is HMAC-signed by the API and verified inside PostgreSQL; caller-set legacy GUC values do not grant access.
 
 If the API runs behind a reverse proxy, set `TRUST_PROXY_HOPS` to the exact number of trusted proxy hops so Express can determine the client IP correctly. Do not enable proxy trust without configuring the trusted network path; otherwise client IPs may be spoofed. Expired ledger rows should be periodically pruned as an operational maintenance task.
+
+## Signed RLS request context
+
+Migration `db/migrations/004_signed_rls_context.sql` replaces the legacy GUC-based RLS predicates with a database-verified HMAC-signed context. The API requires `RLS_CONTEXT_HMAC_SECRET` (at least 32 random bytes). Provision the same value into the private database key table using a schema-owner/admin connection:
+
+```bash
+ADMIN_DATABASE_URL='postgresql://...' RLS_CONTEXT_HMAC_SECRET='...' npm run db:provision-rls-context-key
+```
+
+Keep the key in the API hosting provider's server-only environment and in the database's private key table. Do not commit it, expose it as a `VITE_` variable, or give it to ordinary runtime clients. Rotate it only through a coordinated API/database key update. The provisioning command overwrites the active key, so rotation requires a controlled maintenance window or a reviewed dual-key rotation migration.
+
+The migration and key provisioning are separate from the existing production deployment workflow. Do not dispatch the current Neon deployment workflow until its steps are updated to apply migration 004, provision the matching signing key, and verify signed-context isolation. No migration or key provisioning is automatic.
 
 ## Read-only inspection
 
