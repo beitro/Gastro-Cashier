@@ -134,7 +134,8 @@ CREATE POLICY outlet_bootstrap_insert ON public.outlets FOR INSERT
 
 CREATE POLICY membership_tenant_or_auth_lookup ON public.tenant_memberships FOR SELECT
   USING (
-    tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+    (app_private.rls_context()->'capabilities' ? 'tenant_scope'
+      AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID)
     OR app_private.rls_context()->'capabilities' ? 'auth_lookup'
     OR app_private.rls_context()->'capabilities' ? 'bootstrap'
   );
@@ -239,11 +240,12 @@ BEGIN
   ] LOOP
     EXECUTE format(
       'CREATE POLICY tenant_outlet_isolation ON public.%I USING (
-        app_private.rls_context()->'capabilities' ? 'tenant_scope'
+        app_private.rls_context()->''capabilities'' ? ''tenant_scope''
         AND tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
         AND (outlet_id IS NULL OR outlet_id = NULLIF(app_private.rls_context()->>''outlet_id'','''')::UUID)
       ) WITH CHECK (
-        tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
+        app_private.rls_context()->''capabilities'' ? ''tenant_scope''
+        AND tenant_id = NULLIF(app_private.rls_context()->>''tenant_id'','''')::UUID
         AND (outlet_id IS NULL OR outlet_id = NULLIF(app_private.rls_context()->>''outlet_id'','''')::UUID)
       )', tbl
     );
