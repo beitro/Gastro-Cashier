@@ -72,6 +72,24 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
           RUNTIME_DB_PASSWORD: ci-runtime-password-with-more-than-24-characters
         run: npm run db:provision-runtime-role
+      - name: Apply emergency staff-read-only privilege migration twice
+        env:
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          import { readFile } from 'node:fs/promises';
+          const c=new pg.Client({connectionString:process.env.ADMIN_DATABASE_URL});
+          await c.connect();
+          const sql=await readFile('db/migrations/005_emergency_staff_readonly.sql','utf8');
+          await c.query(sql);
+          await c.query(sql);
+          await c.end();
+          NODE
+      - name: Verify runtime staff mutations are denied while reads remain allowed
+        env:
+          DATABASE_URL: postgresql://gastro_runtime:ci-runtime-password-with-more-than-24-characters@localhost:5432/gastro_test
+        run: node scripts/db-emergency-staff-readonly.mjs
       - name: Assert stale table, truncate and schema-create grants were revoked
         run: |
           node --input-type=module <<'NODE'
