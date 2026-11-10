@@ -14,6 +14,14 @@ try {
     throw new Error('Test must run as a non-superuser, non-BYPASSRLS runtime role.');
   }
 
+  // Match the exact read-only staff-directory projection used by GET /api/admin/staff.
+  await client.query(`SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,
+    (a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at
+    FROM staff_accounts a
+    JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1
+    JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2
+    LIMIT 0`, ['00000000-0000-0000-0000-000000000000','00000000-0000-0000-0000-000000000000']);
+
   const statements = [
     ['staff_accounts INSERT', `INSERT INTO staff_accounts(id,display_name) VALUES(gen_random_uuid(),'emergency-test')`],
     ['staff_accounts UPDATE', `UPDATE staff_accounts SET display_name=display_name WHERE FALSE`],
