@@ -505,6 +505,7 @@ app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyn
         (method!=='cash'||Number(prior.cash_received)===Number(cashReceived)) &&
         (prior.card_bank||null)===(cardBank||null);
       if(!sameRequest) return {status:409,body:{error:'Idempotency key sudah digunakan untuk payload pembayaran yang berbeda.'}};
+      if(prior.status==='voided') return {status:409,body:{error:'Pembayaran dengan idempotency key ini sudah di-void. Gunakan key baru untuk percobaan pembayaran berikutnya.',code:'PAYMENT_KEY_ALREADY_VOIDED'}};
       return {status:200,body:prior};
     }
     if(!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Sesi sudah ditutup dan tidak menerima pembayaran baru.'}};
