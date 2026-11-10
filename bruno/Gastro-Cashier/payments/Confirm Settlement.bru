@@ -1,0 +1,23 @@
+meta {
+  name: Confirm Settlement (Manager or Finance)
+  type: http
+  seq: 6
+}
+patch {
+  url: {{baseUrl}}/api/payments/{{paymentId}}/settle
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{managerToken}}
+}
+body:json {
+  providerReference: "BRUNO-SETTLEMENT-001",
+  note: "Manual confirmation after payment evidence check"
+}
+script:post-response {
+  test("payment is settled only after confirmation", function() {
+    expect(res.body.status).to.equal("settled");
+    expect(res.body.paid_at).to.be.a("string");
+  });
+}
