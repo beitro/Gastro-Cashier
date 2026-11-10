@@ -40,6 +40,14 @@ npm run test:e2e:pos
 
 The test performs PIN login, reads the table/menu catalogs, opens a table session, submits one order, settles cash payment with a stable receipt response, and verifies the table is available again. Each run creates a closed test transaction and receipt; it does not delete transaction history.
 
+## KDS and waiter status persistence
+
+The API-backed POS also persists kitchen/bar progress and waiter handoff:
+- `PATCH /api/sessions/:sessionId/orders/:itemId` accepts `cookingStatus` (`queue`, `cooking`, `ready`, `handed_off`) and/or `isServed` (boolean).
+- The endpoint is tenant/outlet scoped, requires an active/billing session, and locks the session row while updating the item so settlement cannot race the status change.
+- The order snapshot returns `served_at`; the UI refreshes from the database after each status change.
+- Staff management remains read-only (HTTP 423) independently of POS order status updates.
+
 ## Known API/UI scope
 
 - Menu and table identifiers are resolved to database UUIDs by the API adapter.
