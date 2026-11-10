@@ -234,13 +234,15 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
   const result=await adminScoped(req,async c=>{
     const current=await c.query('SELECT tm.id,tm.role_code,a.status FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$3 WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF tm,a',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
     if(!current.rowCount)return {status:404,error:'Staff tidak ditemukan di outlet ini.'};
+    const tenantCount=await c.query('SELECT count(DISTINCT tenant_id)::int AS count FROM tenant_memberships WHERE staff_id=$1',[req.params.staffId]);
+    if(tenantCount.rows[0].count>1)return {status:409,error:'Akun ini terhubung ke beberapa tenant; perubahan status akun global harus melalui administrasi pusat.'};
     const old=current.rows[0],nextRole=role||old.role_code,nextStatus=status||old.status;
     if(old.role_code==='owner'&&(nextRole!=='owner'||nextStatus!=='active')){
       const owners=await c.query('SELECT count(*)::int AS count FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE tm.tenant_id=$1 AND tm.role_code=\'owner\' AND tm.status=\'active\'',[req.auth.tenant_id,req.auth.outlet_id]);
       if(owners.rows[0].count<=1)return {status:409,error:'Tidak bisa menurunkan/nonaktifkan satu-satunya Owner aktif di outlet.'};
     }
     if(role!==undefined){await c.query('UPDATE tenant_memberships SET role_code=$1 WHERE id=$2',[role,old.id]);await c.query('UPDATE outlet_memberships SET role_code=$1 WHERE tenant_id=$2 AND outlet_id=$3 AND tenant_membership_id=$4',[role,req.auth.tenant_id,req.auth.outlet_id,old.id]);}
-    if(status!==undefined){await c.query('UPDATE staff_accounts SET status=$1 WHERE id=$2',[status,req.params.staffId]);await c.query('UPDATE tenant_memberships SET status=$1 WHERE id=$2',[status,old.id]);if(status!=='active')await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND outlet_id=$2 AND staff_id=$3 AND revoked_at IS NULL',[req.auth.tenant_id,req.auth.outlet_id,req.params.staffId]);}
+    if(status!==undefined){await c.query('UPDATE staff_accounts SET status=$1 WHERE id=$2',[status,req.params.staffId]);await c.query('UPDATE tenant_memberships SET status=$1 WHERE id=$2',[status,old.id]);if(status!=='active')await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);}
     return {status:200};
   });
   if(result.status!==200)return res.status(result.status).json({error:result.error});
@@ -255,13 +257,16 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
   const result=await adminScoped(req,async c=>{
     const member=await c.query('SELECT tm.id FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id WHERE tm.tenant_id=$1 AND tm.staff_id=$2 AND om.outlet_id=$3',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
     if(!member.rowCount)return false;
+    const tenantCount=await c.query('SELECT count(DISTINCT tenant_id)::int AS count FROM tenant_memberships WHERE staff_id=$1',[req.params.staffId]);
+    if(tenantCount.rows[0].count>1)return 'multi';
     const sets=[],values=[req.params.staffId];
     if(pinHash){values.push(pinHash);sets.push('pin_hash=$'+values.length);}
     if(nfcHash){values.push(nfcHash);sets.push('nfc_credential_hash=$'+values.length);}
     await c.query('UPDATE staff_accounts SET '+sets.join(',')+' WHERE id=$1',values);
-    await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND outlet_id=$2 AND staff_id=$3 AND revoked_at IS NULL',[req.auth.tenant_id,req.auth.outlet_id,req.params.staffId]);
+    await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);
     return true;
   });
+  if(result==='multi')return res.status(409).json({error:'Akun ini terhubung ke beberapa tenant; reset credential global harus melalui administrasi pusat.'});
   if(!result)return res.status(404).json({error:'Staff tidak ditemukan di outlet ini.'});
   res.json({ok:true,credentialsUpdated:true,sessionsRevoked:true});
 }));
