@@ -1,0 +1,27 @@
+meta {
+  name: Create Order After Cancellation
+  type: http
+  seq: 4
+}
+post {
+  url: {{baseUrl}}/api/sessions/{{sessionId}}/orders
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{cashierToken}}
+}
+body:json {
+  items: [
+    {
+      menuItemId: "{{menuItemId}}",
+      quantity: 1,
+      notes: "New batch after manager cancellation"
+    }
+  ],
+  idempotencyKey: "audit-order-after-cancel-001"
+}
+script:post-response {
+  bru.setEnvVar("orderItemId", res.body.items[0].id);
+  bru.setEnvVar("batchId", res.body.batch.id);
+}
