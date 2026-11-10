@@ -546,7 +546,8 @@ app.patch('/api/order-batches/:batchId/cancel', authenticate, requireManagerOrOw
     for(const item of items.rows) {
       await c.query("UPDATE order_items SET cooking_status='cancelled' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,item.id]);
       const stock=await c.query('SELECT track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,item.menu_item_id]);
-      if(stock.rowCount&&stock.rows[0].track_stock) {
+      const sold=await c.query("SELECT 1 FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND reference_type='order_item' AND reference_id=$3 AND movement_type='sale'",[req.auth.tenant_id,req.auth.outlet_id,item.id]);
+      if(stock.rowCount&&stock.rows[0].track_stock&&sold.rowCount) {
         await c.query('UPDATE menu_stock SET quantity=quantity+$1,updated_at=now(),updated_by_staff_id=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND menu_item_id=$5',[item.quantity,req.auth.staff_id,req.auth.tenant_id,req.auth.outlet_id,item.menu_item_id]);
         await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,order_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
           VALUES($1,$2,$3,$4,'return',$5,'order_item',$4,'Manager cancellation',$6)`,
@@ -575,7 +576,8 @@ app.patch('/api/order-items/:itemId/cancel', authenticate, requireManagerOrOwner
     await c.query("UPDATE order_items SET cooking_status='cancelled' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
     let restored=false;
     const stock=await c.query('SELECT track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
-    if(stock.rowCount&&stock.rows[0].track_stock) {
+    const sold=await c.query("SELECT 1 FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND reference_type='order_item' AND reference_id=$3 AND movement_type='sale'",[req.auth.tenant_id,req.auth.outlet_id,item.rows[0].id]);
+    if(stock.rowCount&&stock.rows[0].track_stock&&sold.rowCount) {
       await c.query('UPDATE menu_stock SET quantity=quantity+$1,updated_at=now(),updated_by_staff_id=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND menu_item_id=$5',[item.rows[0].quantity,req.auth.staff_id,req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
       await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,order_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
         VALUES($1,$2,$3,$4,'return',$5,'order_item',$4,'Manager item cancellation',$6)`,
