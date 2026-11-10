@@ -72,6 +72,13 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
           RUNTIME_DB_PASSWORD: ci-runtime-password-with-more-than-24-characters
         run: npm run db:provision-runtime-role
+      - name: Set ephemeral CI runtime-role password
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d gastro_test -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER ROLE gastro_runtime PASSWORD 'ci-runtime-password-with-more-than-24-characters';
+          SQL
       - name: Apply emergency staff-read-only privilege migration twice
         env:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
