@@ -15,6 +15,13 @@ try {
   if (!exists.rowCount) await client.query(`CREATE ROLE ${ident(roleName)} LOGIN`);
   await client.query(`ALTER ROLE ${ident(roleName)} WITH LOGIN PASSWORD ${literal(password)} NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`);
   const db = (await client.query('SELECT current_database() AS name')).rows[0].name;
+  // Remove stale direct grants before applying the allowlist. Re-granting alone is not least privilege.
+  for (const sql of [
+    `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${ident(roleName)}`,
+    `REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${ident(roleName)}`,
+    `REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM ${ident(roleName)}`,
+    `REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${ident(roleName)}`
+  ]) await client.query(sql);
   const grants = [
     `GRANT CONNECT ON DATABASE ${ident(db)} TO ${ident(roleName)}`,
     `GRANT USAGE ON SCHEMA public TO ${ident(roleName)}`,
@@ -27,7 +34,7 @@ try {
   for (const sql of grants) await client.query(sql);
   const result=await client.query('SELECT rolname,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolinherit FROM pg_roles WHERE rolname=$1',[roleName]);
   const role=result.rows[0];
-  const ownership=await client.query("SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') AND c.relowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_objects, EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_schema, EXISTS(SELECT 1 FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS has_memberships",[roleName]);
+  const ownership=await client.query("SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S') AND c.relowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_objects, EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_schema, EXISTS(SELECT 1 FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS has_memberships",[roleName]);
   if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolinherit || ownership.rows[0].owns_objects || ownership.rows[0].owns_schema || ownership.rows[0].has_memberships) throw new Error('Runtime role must be non-owner, NOSUPERUSER, NOBYPASSRLS, NOINHERIT and have no role memberships.');
   console.log(JSON.stringify({provisioned:true,role:role.rolname,superuser:role.rolsuper,bypassRls:role.rolbypassrls,inherit:role.rolinherit},null,2));
 } finally { await client.end().catch(()=>{}); }
