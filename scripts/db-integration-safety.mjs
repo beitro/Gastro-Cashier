@@ -191,7 +191,8 @@ try {
   await runtime.query('ROLLBACK');
 
   phase('verify signed Owner capability and reject signed non-Owner staff administration');
-  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
+  // Exercise signed Owner RLS policy with the broad-grant test role; production gastro_runtime is separately tested as read-only.
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'cashier',pending_staff_id:ids.staffCreated,capabilities:['tenant_scope','staff_admin']});
   await assertDenied(runtime,'INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`cashier-forged-${slug}@test.invalid`,'Forged Admin','scrypt$00$00'],'Signed non-Owner staff creation');
   await runtime.query('ROLLBACK');
