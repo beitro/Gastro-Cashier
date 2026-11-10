@@ -42,10 +42,15 @@ try {
 
   phase('verify deny-by-default without tenant context');
   await runtime.connect(); await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  for (const table of ['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','staff_sessions','dining_tables']) {
+  for (const table of ['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','staff_sessions','dining_tables','auth_rate_limits']) {
     const result = await runtime.query(`SELECT * FROM ${table}`);
     if (result.rowCount !== 0) throw new Error(`No-context query leaked ${table}`);
   }
+  await runtime.query('ROLLBACK');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await runtime.query("SELECT set_config('app.auth_rate_limit','true',true)");
+  await runtime.query('INSERT INTO auth_rate_limits(scope_hash,failed_attempts) VALUES($1,1)',[ 'a'.repeat(64) ]);
+  if ((await runtime.query('SELECT failed_attempts FROM auth_rate_limits WHERE scope_hash=$1',[ 'a'.repeat(64) ])).rowCount !== 1) throw new Error('Auth rate-limit context could not access its own ledger');
   await runtime.query('ROLLBACK');
 
   phase('verify explicit pre-auth lookup and token-scoped session access');
