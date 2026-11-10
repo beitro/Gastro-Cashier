@@ -84,7 +84,7 @@ export function authenticateStaff(staff: StaffAccount): StaffAccount | null {
 export function canOperatePOS(staff: StaffAccount | null): boolean {
   return !!staff && staff.status !== 'blocked' && staff.status !== 'inactive' && staff.role !== 'finance';
 }
-export function canApproveCancellation(staff: StaffAccount | null): boolean { return !!staff && staff.role === 'owner' && staff.status !== 'blocked' && staff.status !== 'inactive'; }
+export function canApproveCancellation(staff: StaffAccount | null): boolean { return !!staff && (staff.role === 'owner' || staff.role === 'manager') && staff.status !== 'blocked' && staff.status !== 'inactive'; }
 export function isSameOutlet(staff: StaffAccount | null, table: Table): boolean {
   if (!staff) return false;
   if (staff.role === 'owner') return true;
