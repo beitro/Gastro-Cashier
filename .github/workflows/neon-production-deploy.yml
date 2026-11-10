@@ -253,6 +253,44 @@ jobs:
           set -euo pipefail
           npm install --no-save --no-package-lock --ignore-scripts pg@^8.16.3
           npm run db:provision-runtime-role
+      - name: Apply emergency staff read-only migration 005
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/005_emergency_staff_readonly.sql'
+      - name: Verify staff mutation privileges are revoked (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts pg@^8.16.3
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const c = new pg.Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:10000});
+          const role = 'gastro_runtime';
+          const tables = ['public.staff_accounts','public.tenant_memberships','public.outlet_memberships'];
+          const readColumns = ['id','display_name','email','phone','status','pin_hash','nfc_credential_hash','created_at'];
+          try {
+            await c.connect();
+            for (const table of tables) {
+              const r = await c.query(`SELECT
+                has_table_privilege($1,$2,'INSERT') AS table_insert,
+                has_table_privilege($1,$2,'UPDATE') AS table_update,
+                has_table_privilege($1,$2,'DELETE') AS table_delete,
+                has_table_privilege($1,$2,'TRUNCATE') AS table_truncate,
+                has_any_column_privilege($1,$2,'INSERT') AS column_insert,
+                has_any_column_privilege($1,$2,'UPDATE') AS column_update`,[role,table]);
+              if (Object.values(r.rows[0]).some(Boolean)) throw new Error('Runtime staff mutation privilege remains on '+table+': '+JSON.stringify(r.rows[0]));
+            }
+            for (const column of readColumns) {
+              const r = await c.query('SELECT has_column_privilege($1,$2,$3,\'SELECT\') AS allowed',[role,'public.staff_accounts',column]);
+              if (!r.rows[0].allowed) throw new Error('Runtime staff directory SELECT projection missing column '+column);
+            }
+            console.log(JSON.stringify({staffMutationPrivileges:'revoked',staffDirectoryProjection:'readable'}));
+          } finally { await c.end(); }
+          NODE
       - name: Provision private RLS context signing key
         env:
           ADMIN_DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
