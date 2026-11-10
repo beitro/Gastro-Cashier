@@ -14,7 +14,7 @@ try {
   await client.query('BEGIN');
   const exists = await client.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[roleName]);
   if (!exists.rowCount) await client.query(`CREATE ROLE ${ident(roleName)} LOGIN`);
-  await client.query(`ALTER ROLE ${ident(roleName)} WITH LOGIN PASSWORD ${literal(password)} NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`);
+  await client.query(`ALTER ROLE ${ident(roleName)} WITH LOGIN PASSWORD ${literal(password)}`);
   const db = (await client.query('SELECT current_database() AS name')).rows[0].name;
   // Remove stale direct grants before applying the allowlist. Re-granting alone is not least privilege.
   for (const sql of [
@@ -25,7 +25,8 @@ try {
   ]) await client.query(sql);
   const grants = [
     `GRANT CONNECT ON DATABASE ${ident(db)} TO ${ident(roleName)}`,
-    `GRANT USAGE ON SCHEMA public TO ${ident(roleName)}`,
+    `GRANT USAGE ON SCHEMA public, app_private TO ${ident(roleName)}`,
+    `GRANT EXECUTE ON FUNCTION app_private.rls_context() TO ${ident(roleName)}`,
     `GRANT SELECT ON tenants,outlets,tenant_memberships,outlet_memberships,tenant_settings,outlet_settings,menu_categories,menu_items,dining_tables,dining_sessions,order_batches,order_items,payments,v_table_board,staff_sessions TO ${ident(roleName)}`,
     `GRANT SELECT (id,display_name,email,phone,status,pin_hash,nfc_credential_hash) ON staff_accounts TO ${ident(roleName)}`,
     `GRANT INSERT (email,phone,display_name,pin_hash,nfc_credential_hash) ON staff_accounts TO ${ident(roleName)}`,
@@ -42,7 +43,7 @@ try {
   const result=await client.query('SELECT rolname,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolinherit,rolreplication FROM pg_roles WHERE rolname=$1',[roleName]);
   const role=result.rows[0];
   const ownership=await client.query("SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S') AND c.relowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_objects, EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND nspowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_schema, EXISTS(SELECT 1 FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS has_memberships, has_schema_privilege($1,'public','CREATE') AS can_create_schema_objects, has_database_privilege($1,current_database(),'CREATE') AS can_create_schemas",[roleName]);
-  if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolinherit || role.rolreplication || ownership.rows[0].owns_objects || ownership.rows[0].owns_schema || ownership.rows[0].has_memberships || ownership.rows[0].can_create_schema_objects || ownership.rows[0].can_create_schemas) throw new Error('Runtime role must be non-owner, NOSUPERUSER, NOBYPASSRLS, NOINHERIT and have no role memberships.');
+  if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolreplication || ownership.rows[0].owns_objects || ownership.rows[0].owns_schema || ownership.rows[0].has_memberships || ownership.rows[0].can_create_schema_objects || ownership.rows[0].can_create_schemas) throw new Error('Runtime role must be non-owner, NOSUPERUSER, NOBYPASSRLS and have no role memberships; Neon-managed INHERIT is acceptable only when membership-free.');
   await client.query('COMMIT');
   console.log(JSON.stringify({provisioned:true,role:role.rolname,superuser:role.rolsuper,bypassRls:role.rolbypassrls,inherit:role.rolinherit},null,2));
 } catch (error) {
