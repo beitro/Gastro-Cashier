@@ -6,6 +6,11 @@ DO $$
 DECLARE runtime_role TEXT := 'gastro_runtime';
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = runtime_role) THEN
+    -- Preserve the exact projection needed by GET /api/admin/staff.
+    EXECUTE format(
+      'GRANT SELECT (id,display_name,email,phone,status,pin_hash,nfc_credential_hash,created_at) ON TABLE public.staff_accounts TO %I',
+      runtime_role
+    );
     EXECUTE format(
       'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.staff_accounts, public.tenant_memberships, public.outlet_memberships FROM %I',
       runtime_role

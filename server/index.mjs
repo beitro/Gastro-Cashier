@@ -461,12 +461,17 @@ async function assertSafeRuntimeRole() {
     FROM pg_roles r WHERE r.rolname=current_user
   `);
   const role=result.rows[0];
-  if (!role || role.rolsuper || role.rolbypassrls || role.rolinherit || role.rolcreatedb || role.rolcreaterole || role.rolreplication || role.owns_public_objects || role.owns_public_schema || role.has_role_memberships || role.can_create_public_objects || role.can_create_schemas) {
-    throw new Error('Unsafe DATABASE_URL role. API requires a dedicated non-owner role with NOSUPERUSER, NOBYPASSRLS, NOINHERIT and no privileged role memberships.');
+  if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolreplication || role.owns_public_objects || role.owns_public_schema || role.has_role_memberships || role.can_create_public_objects || role.can_create_schemas) {
+    throw new Error('Unsafe DATABASE_URL role. API requires a dedicated non-owner role with NOSUPERUSER, NOBYPASSRLS and no privileged role memberships. Neon-managed INHERIT is accepted only when no memberships exist.');
   }
 }
 await assertSafeRuntimeRole();
-const port=Number(process.env.PORT || 8080);
-const server=app.listen(port,'0.0.0.0',()=>console.log('Gastro-Cashier API listening on '+port));
-async function shutdown(){server.close();await pool.end();await bootstrapPool?.end();process.exit(0);}
-process.on('SIGTERM',shutdown); process.on('SIGINT',shutdown);
+
+if (!process.env.VERCEL) {
+  const port=Number(process.env.PORT || 8080);
+  const server=app.listen(port,'0.0.0.0',()=>console.log('Gastro-Cashier API listening on '+port));
+  async function shutdown(){server.close();await pool.end();await bootstrapPool?.end();process.exit(0);}
+  process.on('SIGTERM',shutdown); process.on('SIGINT',shutdown);
+}
+
+export default app;
