@@ -17,7 +17,7 @@ REVOKE ALL ON app_private.rls_context_keys FROM PUBLIC;
 CREATE OR REPLACE FUNCTION app_private.rls_context()
 RETURNS JSONB
 LANGUAGE plpgsql
-STABLE
+VOLATILE
 SECURITY DEFINER
 SET search_path = pg_catalog, app_private, public
 AS $$
@@ -68,7 +68,8 @@ BEGIN
      OR COALESCE(claims->>'jti', '') = ''
      OR COALESCE((claims->>'iat')::BIGINT, 0) > now_epoch + 30
      OR COALESCE((claims->>'exp')::BIGINT, 0) <= now_epoch
-     OR COALESCE((claims->>'exp')::BIGINT, 0) - COALESCE((claims->>'iat')::BIGINT, 0) > 120 THEN
+     OR COALESCE((claims->>'exp')::BIGINT, 0) - COALESCE((claims->>'iat')::BIGINT, 0) > 120
+     OR claims->>'txid' IS DISTINCT FROM txid_current()::TEXT THEN
     RETURN NULL;
   END IF;
   RETURN claims;
