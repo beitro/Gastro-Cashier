@@ -27,6 +27,15 @@ curl -X POST http://localhost:8080/api/bootstrap \
 
 The PIN must be 4–8 digits. Bootstrap stores a salted scrypt hash, not the raw PIN. Do not use the example PIN in a real deployment. NFC provisioning accepts an optional `nfcUid`; only its salted hash is stored. Disable/remove `BOOTSTRAP_TOKEN` after initial provisioning.
 
+## Security controls
+
+- PIN and NFC login attempts are throttled in PostgreSQL per client IP (five attempts per 15-minute window, then a 30-second block); the stored key is a SHA-256 hash, not the raw IP.
+- If deployed behind a reverse proxy, set `TRUST_PROXY_HOPS` only to the exact trusted proxy count.
+- POS routes require an active Owner or Cashier role. Finance and unknown role codes are denied; role normalization fails closed.
+- A requested waiter must be an active member of the same tenant and outlet.
+- Payment idempotency keys are bound to the same session and payment payload; reusing a key for a different payload returns HTTP 409.
+- Bootstrap is serialized and can create the initial tenant only once.
+
 ## API routes
 
 - `GET /api/health` — PostgreSQL connectivity and server version.
