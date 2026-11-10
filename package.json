@@ -16,7 +16,8 @@
     "db:provision-runtime-role": "node scripts/db-provision-runtime-role.mjs",
     "db:provision-rls-context-key": "node scripts/db-provision-rls-context-key.mjs",
     "test:e2e:pos": "node scripts/e2e-pos-transaction.mjs",
-    "db:provision-pos-e2e-staff": "node scripts/provision-dev-pos-e2e-staff.mjs"
+    "db:provision-pos-e2e-staff": "node scripts/provision-dev-pos-e2e-staff.mjs",
+    "test:e2e:inventory": "node scripts/e2e-pos-inventory-settlement.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
