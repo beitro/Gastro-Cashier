@@ -196,7 +196,7 @@ try {
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'cashier',pending_staff_id:ids.staffCreated,capabilities:['tenant_scope','staff_admin']});
   await assertDenied(runtime,'INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`cashier-forged-${slug}@test.invalid`,'Forged Admin','scrypt$00$00'],'Signed non-Owner staff creation');
   await runtime.query('ROLLBACK');
-  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',pending_staff_id:ids.staffCreated,capabilities:['tenant_scope','staff_admin']});
   const verifiedClaims=(await runtime.query("SELECT app_private.rls_context() AS claims")).rows[0].claims;
   if(!verifiedClaims || verifiedClaims.role_code!=='owner' || verifiedClaims.actor_staff_id!==ids.staffA || !verifiedClaims.capabilities.includes('staff_admin')) throw new Error('Signed Owner context claims were not verified correctly: '+JSON.stringify(verifiedClaims));
