@@ -2,6 +2,12 @@
 
 The repository contains a PostgreSQL-backed API foundation, guarded baseline schema, incremental RLS migration, and a gated production deployment workflow. The React POS screens are not yet fully migrated from localStorage; refunds, inventory movements, petty cash, finance reporting, and multi-outlet selection remain incomplete. Do not treat the application as production-ready multi-device POS.
 
+## Authentication abuse protection
+
+PIN and NFC authentication attempts are rate-limited in PostgreSQL by a SHA-256 hash of the client IP, shared across API instances: five attempts per 15-minute window are allowed, then the source is blocked for 30 seconds. Successful authentication resets the counter. The raw IP address is not stored. The ledger is protected by forced RLS and is only visible when the API sets the transaction-local `app.auth_rate_limit` context.
+
+If the API runs behind a reverse proxy, set `TRUST_PROXY_HOPS` to the exact number of trusted proxy hops so Express can determine the client IP correctly. Do not enable proxy trust without configuring the trusted network path; otherwise client IPs may be spoofed. Expired ledger rows should be periodically pruned as an operational maintenance task.
+
 ## Read-only inspection
 
 Set the server-only Neon connection string as `DATABASE_URL` and run:
