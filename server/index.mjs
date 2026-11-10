@@ -48,6 +48,9 @@ async function setRlsContext(client, claims) {
   const payload = Buffer.from(JSON.stringify({ v: 1, jti: randomUUID(), iat: now, exp: now + 60, txid: tx.rows[0].txid, capabilities: [], ...claims }));
   const payloadPart = payload.toString('base64url');
   const signaturePart = createHmac('sha256', rlsSecret).update(payload).digest('base64url');
+  if (claims.tenant_id) {
+    await client.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)", [claims.tenant_id, claims.outlet_id || '']);
+  }
   await client.query("SELECT set_config('app.context_token',$1,true)", [payloadPart + '.' + signaturePart]);
 }
 async function transaction(fn, dbPool = pool) {
