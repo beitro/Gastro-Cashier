@@ -259,9 +259,9 @@ CREATE TABLE auth_rate_limits (
 );
 CREATE INDEX idx_auth_rate_limits_updated ON auth_rate_limits(updated_at);
 
-CREATE FUNCTION reject_audit_log_mutation() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION reject_audit_log_mutation() RETURNS trigger LANGUAGE plpgsql AS $audit$
 BEGIN RAISE EXCEPTION 'audit_logs is append-only'; END;
-$$;
+$audit$;
 CREATE TRIGGER trg_audit_logs_immutable BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION reject_audit_log_mutation();
 
