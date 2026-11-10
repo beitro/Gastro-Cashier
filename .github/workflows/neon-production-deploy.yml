@@ -79,7 +79,7 @@ jobs:
           docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
             postgres:18-alpine sh -ec 'pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" --file=/work/backup/neon-pre-migration.dump'
           test -s backup/neon-pre-migration.dump
-          sha256sum backup/neon-pre-migration.dump | tee backup/SHA256SUMS
+          (cd backup && sha256sum neon-pre-migration.dump > SHA256SUMS)
           printf '%s' "$NEON_BACKUP_PASSPHRASE" > "$RUNNER_TEMP/neon-backup.pass"
           chmod 600 "$RUNNER_TEMP/neon-backup.pass"
           gpg --batch --yes --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/neon-backup.pass" \
