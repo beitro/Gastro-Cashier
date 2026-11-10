@@ -27,7 +27,7 @@ try {
     `GRANT CONNECT ON DATABASE ${ident(db)} TO ${ident(roleName)}`,
     `GRANT USAGE ON SCHEMA public TO ${ident(roleName)}`,
     `GRANT SELECT ON tenants,outlets,tenant_memberships,outlet_memberships,tenant_settings,outlet_settings,menu_categories,menu_items,dining_tables,dining_sessions,order_batches,order_items,payments,v_table_board,staff_sessions TO ${ident(roleName)}`,
-    `GRANT SELECT (id,display_name,email,phone,status,pin_hash,nfc_credential_hash) ON staff_accounts TO ${ident(roleName)}`,
+    `GRANT SELECT (id,display_name,email,phone,status,pin_hash,nfc_credential_hash,created_at) ON staff_accounts TO ${ident(roleName)}`,
     // Emergency release: staff-account and membership DML is intentionally not granted.
     `GRANT INSERT ON dining_sessions,order_batches,order_items,payments,payment_allocations,staff_sessions,audit_logs TO ${ident(roleName)}`,
     `GRANT UPDATE ON dining_sessions,order_items,auth_rate_limits TO ${ident(roleName)}`,
