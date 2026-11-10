@@ -106,6 +106,12 @@ app.get('/api/health', asyncRoute(async (_req, res) => {
   res.json({ ok: true, database: 'postgresql', version: r.rows[0].version });
 }));
 
+// Emergency release: bootstrap creates a staff account through the separate privileged connection.
+app.use('/api/bootstrap', (req,res,next) => {
+  if (req.method !== 'POST') return next();
+  return res.status(423).json({ error:'Bootstrap dinonaktifkan selama emergency release; provisioning harus dilakukan di luar API runtime.', code:'BOOTSTRAP_DISABLED' });
+});
+
 // One-time tenant/outlet/staff provisioning. Keep BOOTSTRAP_TOKEN out of source control.
 app.post('/api/bootstrap', asyncRoute(async (req, res) => {
   if (!process.env.BOOTSTRAP_TOKEN || req.get('x-bootstrap-token') !== process.env.BOOTSTRAP_TOKEN) return res.status(403).json({ error: 'Bootstrap tidak diizinkan.' });
