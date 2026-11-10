@@ -1166,6 +1166,7 @@ export default function App() {
               : undefined
           }
           paymentFlowMode={paymentFlowMode}
+          allowPaymentFirst={false}
           onChangePaymentFlowMode={setPaymentFlowMode}
           onClose={() => setOrderModalTable(null)}
           onSubmitOrder={handleSubmitOrder}
