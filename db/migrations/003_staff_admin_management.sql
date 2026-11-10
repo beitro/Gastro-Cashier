@@ -30,6 +30,7 @@ CREATE POLICY tenant_self_scope ON tenants FOR SELECT
   USING (id=nullif(current_setting('app.tenant_id',true),'')::uuid
     OR current_setting('app.auth_lookup',true)='true'
     OR current_setting('app.bootstrap_mode',true)='true');
+DROP POLICY IF EXISTS tenant_bootstrap_insert ON tenants;
 CREATE POLICY tenant_bootstrap_insert ON tenants FOR INSERT
   WITH CHECK (current_setting('app.bootstrap_mode',true)='true');
 
@@ -38,6 +39,7 @@ CREATE POLICY outlet_tenant_or_auth_lookup ON outlets FOR SELECT
   USING (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     OR current_setting('app.auth_lookup',true)='true'
     OR current_setting('app.bootstrap_mode',true)='true');
+DROP POLICY IF EXISTS outlet_bootstrap_insert ON outlets;
 CREATE POLICY outlet_bootstrap_insert ON outlets FOR INSERT
   WITH CHECK (current_setting('app.bootstrap_mode',true)='true');
 
@@ -46,6 +48,7 @@ CREATE POLICY membership_tenant_or_auth_lookup ON tenant_memberships FOR SELECT
   USING (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     OR current_setting('app.auth_lookup',true)='true'
     OR current_setting('app.bootstrap_mode',true)='true');
+DROP POLICY IF EXISTS tenant_membership_bootstrap_insert ON tenant_memberships;
 CREATE POLICY tenant_membership_bootstrap_insert ON tenant_memberships FOR INSERT
   WITH CHECK (current_setting('app.bootstrap_mode',true)='true');
 
@@ -55,6 +58,7 @@ CREATE POLICY outlet_membership_scope_or_auth_lookup ON outlet_memberships FOR S
     OR current_setting('app.bootstrap_mode',true)='true'
     OR (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid));
+DROP POLICY IF EXISTS outlet_membership_bootstrap_insert ON outlet_memberships;
 CREATE POLICY outlet_membership_bootstrap_insert ON outlet_memberships FOR INSERT
   WITH CHECK (current_setting('app.bootstrap_mode',true)='true');
 
