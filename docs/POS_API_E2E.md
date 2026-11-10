@@ -64,7 +64,7 @@ of the following are verified on the same development branch:
 - `app_private.rls_context_keys` contains the provisioned HMAC key (key material
   is never committed or printed).
 - The API runtime uses the same `RLS_CONTEXT_HMAC_SECRET` and a dedicated
-  `gastro_runtime` login with `NOSUPERUSER NOBYPASSRLS NOINHERIT`, no ownership,
+  `gastro_runtime` login with `NOSUPERUSER NOBYPASSRLS`, no ownership,
   and no privileged role memberships.
 - Narrow staff/membership DML grants and signed owner-only RLS policies are
   tested for owner allow, cashier/finance deny, and cross-tenant/outlet deny.
@@ -84,15 +84,18 @@ in `scripts/db-provision-runtime-role.mjs`:
   columns.
 - INSERT/UPDATE only on POS transaction, session, audit and auth-rate-limit
   tables.
-- No INSERT/UPDATE on `staff_accounts`, `tenant_memberships`, or
-  `outlet_memberships`; the emergency staff mutation lock remains active.
+- Column-limited INSERT only on `staff_accounts`, `tenant_memberships`, and
+  `outlet_memberships` to prepare the owner-only create-staff path. No UPDATE
+  on staff or membership records; the HTTP 423 lock remains active.
 - No ownership, superuser, BYPASSRLS, CREATEDB, CREATEROLE, replication, schema
   CREATE privilege, or role memberships.
 
 Neon controls role attributes; this role reports `INHERIT`, but has no role
 memberships, so it inherits no additional role grants. Do not add memberships.
 The role was verified through an actual connection: without a signed context,
-staff, menu and table queries returned zero rows under RLS.
+staff, menu and table queries returned zero rows under RLS. A negative INSERT
+test against `staff_accounts` failed with SQLSTATE 42501 (RLS policy denied
+the row), despite the narrowly scoped INSERT column grants.
 
 Before API runtime activation, rotate the role password through Neon and set
 the resulting connection string only in the Vercel **Preview** environment as
