@@ -7,14 +7,21 @@ DROP POLICY IF EXISTS staff_admin_insert ON staff_accounts;
 DROP POLICY IF EXISTS staff_admin_update ON staff_accounts;
 CREATE POLICY staff_admin_insert ON staff_accounts FOR INSERT
   WITH CHECK (current_setting('app.staff_admin',true)='true'
-    AND current_setting('app.tenant_id',true) IS NOT NULL);
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm
+      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
+        AND actor_tm.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'));
 CREATE POLICY staff_admin_update ON staff_accounts FOR UPDATE
   USING (current_setting('app.staff_admin',true)='true'
     AND EXISTS (SELECT 1 FROM tenant_memberships tm
-      WHERE tm.staff_id=staff_accounts.id
+      WHERE tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
         AND tm.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
         AND tm.role_code='owner' AND tm.status='active'))
-  WITH CHECK (current_setting('app.staff_admin',true)='true');
+  WITH CHECK (current_setting('app.staff_admin',true)='true'
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm
+      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
+        AND actor_tm.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'));
 
 -- Split the legacy all-command scope policies into explicit read and write policies.
 -- This prevents ordinary tenant-scoped sessions from inserting or changing memberships.
@@ -55,10 +62,18 @@ DROP POLICY IF EXISTS tenant_membership_admin_insert ON tenant_memberships;
 DROP POLICY IF EXISTS tenant_membership_admin_update ON tenant_memberships;
 CREATE POLICY tenant_membership_admin_insert ON tenant_memberships FOR INSERT
   WITH CHECK (current_setting('app.staff_admin',true)='true'
-    AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
+    AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm
+      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
+        AND actor_tm.tenant_id=tenant_memberships.tenant_id
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'));
 CREATE POLICY tenant_membership_admin_update ON tenant_memberships FOR UPDATE
   USING (current_setting('app.staff_admin',true)='true'
-    AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
+    AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm
+      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
+        AND actor_tm.tenant_id=tenant_memberships.tenant_id
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'))
   WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 
 DROP POLICY IF EXISTS outlet_membership_admin_insert ON outlet_memberships;
@@ -66,11 +81,23 @@ DROP POLICY IF EXISTS outlet_membership_admin_update ON outlet_memberships;
 CREATE POLICY outlet_membership_admin_insert ON outlet_memberships FOR INSERT
   WITH CHECK (current_setting('app.staff_admin',true)='true'
     AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
-    AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid);
+    AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm JOIN outlet_memberships actor_om
+      ON actor_om.tenant_id=actor_tm.tenant_id AND actor_om.tenant_membership_id=actor_tm.id
+      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
+        AND actor_tm.tenant_id=outlet_memberships.tenant_id
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'
+        AND actor_om.outlet_id=outlet_memberships.outlet_id AND actor_om.status='active'));
 CREATE POLICY outlet_membership_admin_update ON outlet_memberships FOR UPDATE
   USING (current_setting('app.staff_admin',true)='true'
     AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
-    AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid)
+    AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm JOIN outlet_memberships actor_om
+      ON actor_om.tenant_id=actor_tm.tenant_id AND actor_om.tenant_membership_id=actor_tm.id
+      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
+        AND actor_tm.tenant_id=outlet_memberships.tenant_id
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'
+        AND actor_om.outlet_id=outlet_memberships.outlet_id AND actor_om.status='active'))
   WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid);
 
@@ -78,7 +105,13 @@ DROP POLICY IF EXISTS staff_session_admin_revoke ON staff_sessions;
 CREATE POLICY staff_session_admin_revoke ON staff_sessions FOR UPDATE
   USING (current_setting('app.staff_admin',true)='true'
     AND tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
-    AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid)
+    AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid
+    AND EXISTS (SELECT 1 FROM tenant_memberships actor_tm JOIN outlet_memberships actor_om
+      ON actor_om.tenant_id=actor_tm.tenant_id AND actor_om.tenant_membership_id=actor_tm.id
+      WHERE actor_tm.staff_id=nullif(current_setting('app.actor_staff_id',true),'')::uuid
+        AND actor_tm.tenant_id=staff_sessions.tenant_id
+        AND actor_tm.role_code='owner' AND actor_tm.status='active'
+        AND actor_om.outlet_id=staff_sessions.outlet_id AND actor_om.status='active'))
   WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     AND outlet_id=nullif(current_setting('app.outlet_id',true),'')::uuid);
 
