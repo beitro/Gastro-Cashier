@@ -34,6 +34,10 @@ function signRlsContext(claims) {
 }
 async function setRlsContext(client, claims) {
   const tx = await client.query('SELECT txid_current()::text AS txid');
+  await client.query(
+    "SELECT set_config('app.tenant_id',$1,true), set_config('app.outlet_id',$2,true)",
+    [claims.tenant_id || '', claims.outlet_id || '']
+  );
   await client.query("SELECT set_config('app.context_token',$1,true)", [signRlsContext({ ...claims, txid: tx.rows[0].txid })]);
 }
 const normalizeRole = (role) => role === 'owner' ? 'owner' : role === 'finance' ? 'finance' : role === 'cashier' ? 'cashier' : null;
