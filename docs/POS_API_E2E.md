@@ -64,7 +64,7 @@ of the following are verified on the same development branch:
 - `app_private.rls_context_keys` contains the provisioned HMAC key (key material
   is never committed or printed).
 - The API runtime uses the same `RLS_CONTEXT_HMAC_SECRET` and a dedicated
-  `gastro_runtime` login with `NOSUPERUSER NOBYPASSRLS NOINHERIT`, no ownership,
+  `gastro_runtime` login with `NOSUPERUSER NOBYPASSRLS`, no ownership,
   and no privileged role memberships.
 - Narrow staff/membership DML grants and signed owner-only RLS policies are
   tested for owner allow, cashier/finance deny, and cross-tenant/outlet deny.
@@ -72,3 +72,35 @@ of the following are verified on the same development branch:
 
 The development migration does not authorize production changes, merge, or
 deployment.
+
+
+## Development runtime role provisioned
+
+On Neon branch `gastro-test-seed`, `gastro_runtime` now exists as a LOGIN
+role created through Neon with the `read_only` access class. Its broad initial
+read grants were revoked and replaced with the explicit table/column allowlist
+in `scripts/db-provision-runtime-role.mjs`:
+- SELECT only on POS lookup/transaction tables and the required staff credential
+  columns.
+- INSERT/UPDATE only on POS transaction, session, audit and auth-rate-limit
+  tables.
+- Column-limited INSERT only on `staff_accounts`, `tenant_memberships`, and
+  `outlet_memberships` to prepare the owner-only create-staff path. No UPDATE
+  on staff or membership records; the HTTP 423 lock remains active.
+- No ownership, superuser, BYPASSRLS, CREATEDB, CREATEROLE, replication, schema
+  CREATE privilege, or role memberships.
+
+Neon controls role attributes; this role reports `INHERIT`, but has no role
+memberships, so it inherits no additional role grants. Do not add memberships.
+The role was verified through an actual connection: without a signed context,
+staff, menu and table queries returned zero rows under RLS. A negative INSERT
+test against `staff_accounts` failed with SQLSTATE 42501 (RLS policy denied
+the row), despite the narrowly scoped INSERT column grants.
+
+Before API runtime activation, rotate the role password through Neon and set
+the resulting connection string only in the Vercel **Preview** environment as
+`DATABASE_URL`. Set a cryptographically random, at-least-32-byte
+`RLS_CONTEXT_HMAC_SECRET` in the same Preview environment, and provision the
+identical value into `app_private.rls_context_keys` using
+`scripts/db-provision-rls-context-key.mjs`. Never commit, log, or paste either
+secret into GitHub source. Keep production environment variables untouched.

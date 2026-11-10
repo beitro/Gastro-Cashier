@@ -698,6 +698,7 @@ export default function App() {
         const created = await openApiSession(table, guestCount, currentStaff.id);
         sessionId = created.id;
       }
+      if (!sessionId) throw new Error('Sesi meja tidak memiliki ID yang valid.');
       await submitApiOrder(sessionId, params.newItems, apiMenu);
       const snapshot = await loadPosSnapshot();
       const transaction = snapshot.transactions[sessionId];
@@ -1126,6 +1127,7 @@ export default function App() {
                   const created = await openApiSession(table, table.guestCount || Math.min(table.capacity, 2), currentStaff.id);
                   sessionId = created.id;
                 }
+                if (!sessionId) throw new Error('Sesi meja tidak memiliki ID yang valid.');
                 const snapshot = await loadPosSnapshot();
                 const opened = snapshot.tables.find(t => t.id === table.id);
                 if (!opened || !snapshot.transactions[sessionId]) throw new Error('Sesi meja tidak ditemukan setelah dibuat.');

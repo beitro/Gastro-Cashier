@@ -987,7 +987,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                 </div>
               ) : (
                 cartItems.map((item, index) => {
-                  const sourceMenuItem = MENU_ITEMS.find((m) => m.id === item.menuItemId);
+                  const sourceMenuItem = menuItems.find((m) => m.id === item.menuItemId);
                   return (
                     <div
                       key={item.id}
