@@ -731,7 +731,7 @@ export default function App() {
   // FLOW 2 (NEW): PAYMENT FIRST (LANGSUNG BAYAR DI DEPAN) — SETTLE IMMEDIATELY + PRINT RECEIPT & KITCHEN/BAR/CHECKER
   const handleSubmitPaymentFirstOrder = (_params: {
     table: Table; guestCount: number; waiterName: string; newItems: OrderItem[]; batchNumber: number;
-    paymentMethod: 'cash' | 'qris' | 'card'; cashGiven: number; changeAmount: number; discountAmount: number; keepTableAvailable?: boolean;
+    paymentMethod: 'cash' | 'qris' | 'card' | 'transfer'; cashGiven: number; changeAmount: number; discountAmount: number; keepTableAvailable?: boolean;
   }) => {
     window.alert('Payment First sementara dinonaktifkan sampai backend mendukung pembayaran parsial dan sesi layanan setelah pelunasan. Gunakan Payment Last agar pembayaran tercatat atomik di database.');
   };
@@ -881,16 +881,17 @@ export default function App() {
   const handleCompleteSettlement = async (params: {
     transactionId: string;
     tableId: string;
-    paymentMethod: 'cash' | 'qris' | 'card';
+    paymentMethod: 'cash' | 'qris' | 'card' | 'transfer';
     cashGiven?: number;
+    cardBank?: string;
     changeAmount?: number;
     discountAmount: number;
   }) => {
-    const { transactionId, tableId, paymentMethod, cashGiven, discountAmount } = params;
+    const { transactionId, tableId, paymentMethod, cashGiven, cardBank, discountAmount } = params;
     const currentTx = activeTransactions[transactionId];
     if (!currentTx || !canOperatePOS(currentStaff) || !getApiToken()) return;
     try {
-      const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven);
+      const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven, cardBank);
       if (payment.status !== 'settled') {
         await refreshApiSnapshot();
         window.alert('Pembayaran tercatat sebagai PENDING. Meja belum ditutup dan struk lunas belum diterbitkan. Manager/Finance harus mengonfirmasi pembayaran melalui endpoint settlement setelah verifikasi bukti.');
