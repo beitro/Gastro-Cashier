@@ -18,7 +18,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process
 const bootstrapPool = process.env.BOOTSTRAP_DATABASE_URL ? new Pool({ connectionString: process.env.BOOTSTRAP_DATABASE_URL, ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined, max: 2, connectionTimeoutMillis: 5000 }) : null;
 const scrypt = promisify(scryptCallback);
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
-const normalizeRole = (role) => role === 'owner' || role === 'admin' || role === 'manager' ? 'owner' : role === 'finance' ? 'finance' : 'cashier';
+const normalizeRole = (role) => role === 'owner' || role === 'admin' || role === 'manager' ? 'owner' : role === 'finance' ? 'finance' : role === 'cashier' ? 'cashier' : null;
 function requirePosRole(req, res, next) {
   if (!req.auth || !['owner','cashier'].includes(normalizeRole(req.auth.role_code))) {
     return res.status(403).json({ error:'Role Anda tidak memiliki izin untuk operasi POS.' });
@@ -145,6 +145,7 @@ async function issueSession(staffId, credentialColumn, credential, res) {
     for (const row of matches.rows) if (await verifyCredential(credential,row.credential_hash)) matched.push(row);
     if (!matched.length) return { error:'invalid' };
     if (matched.length > 1) return { error:'multiple' };
+    if (!normalizeRole(matched[0].role_code)) return { error:'role' };
     const row = matched[0], token = randomBytes(32).toString('base64url');
     await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[row.tenant_id,row.outlet_id]);
     await c.query('INSERT INTO staff_sessions(staff_id,tenant_id,outlet_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+make_interval(hours => 12))',[row.staff_id,row.tenant_id,row.outlet_id,sha256(token)]);
@@ -152,6 +153,7 @@ async function issueSession(staffId, credentialColumn, credential, res) {
   });
   if (issued.error === 'invalid') return res.status(401).json({ error:'Kredensial tidak valid atau akun tidak aktif.' });
   if (issued.error === 'multiple') return res.status(409).json({ error:'Staff memiliki lebih dari satu outlet. Endpoint pemilihan outlet perlu digunakan.' });
+  if (issued.error === 'role') return res.status(403).json({ error:'Role staff belum dikenali. Hubungi administrator.' });
   const { row, token } = issued;
   res.json({ token, expiresIn:43200, staff:{ id:row.staff_id,name:row.display_name,role:normalizeRole(row.role_code),roleCode:row.role_code,tenantId:row.tenant_id,tenantName:row.tenant_name,outletId:row.outlet_id,outletName:row.outlet_name,pin:'',nfcTagUid:'',avatarColor:'bg-emerald-600',roleLabel:row.role_code } });
 }
