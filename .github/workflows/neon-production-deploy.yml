@@ -180,7 +180,7 @@ jobs:
           node --input-type=module <<'NODE'
           import pg from 'pg';
           const c=new pg.Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:10000});
-          const required=['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','staff_sessions','tenant_settings','outlet_settings','menu_categories','menu_items','modifier_groups','modifier_options','dining_tables','reservations','dining_sessions','recipes','recipe_lines','inventory_items','inventory_movements','order_batches','order_items','order_item_modifiers','payments','payment_allocations','audit_logs','outbox_events','idempotency_keys','v_table_board'];
+          const required=['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','tenant_settings','outlet_settings','menu_categories','menu_items','modifier_groups','modifier_options','dining_tables','reservations','dining_sessions','recipes','recipe_lines','inventory_items','inventory_movements','order_batches','order_items','order_item_modifiers','payments','payment_allocations','audit_logs','outbox_events','idempotency_keys','v_table_board'];
           try {
             await c.connect();
             const m=(await c.query("SELECT current_user AS role,current_database() AS db,r.rolsuper,r.rolcreaterole,n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=current_user) AS owns_schema FROM pg_roles r JOIN pg_namespace n ON n.nspname='public' WHERE r.rolname=current_user")).rows[0];
@@ -213,6 +213,13 @@ jobs:
             console.log(JSON.stringify({prerequisites:'passed',database:m.db,adminRole:m.role,requiredRelations:required.length,rlsFixture:'verified-before-migration',serverVersionNumber:version.rows[0].n}));
           } finally { await c.end(); }
           NODE
+      - name: Create persistent staff sessions table (idempotent prerequisite)
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_staff_sessions.sql'
       - name: Apply incremental RLS hardening migration 002
         env:
           DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
