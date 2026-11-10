@@ -1,0 +1,15 @@
+meta {
+  name: Cancel Order Item (Manager)
+  type: http
+  seq: 4
+}
+patch {
+  url: {{baseUrl}}/api/order-items/{{orderItemId}}/cancel
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{managerToken}}
+}
+body:json {
+}
