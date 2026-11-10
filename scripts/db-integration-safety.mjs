@@ -191,11 +191,11 @@ try {
 
   phase('verify signed Owner capability and reject signed non-Owner staff administration');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
-  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'cashier',capabilities:['tenant_scope','staff_admin']});
-  await assertDenied(runtime,'INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3)',[`cashier-forged-${slug}@test.invalid`,'Forged Admin','scrypt$00$00'],'Signed non-Owner staff creation');
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'cashier',pending_staff_id:ids.staffCreated,capabilities:['tenant_scope','staff_admin']});
+  await assertDenied(runtime,'INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`cashier-forged-${slug}@test.invalid`,'Forged Admin','scrypt$00$00'],'Signed non-Owner staff creation');
   await runtime.query('ROLLBACK');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
-  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',capabilities:['tenant_scope','staff_admin']});
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',pending_staff_id:ids.staffCreated,capabilities:['tenant_scope','staff_admin']});
   const verifiedClaims=(await runtime.query("SELECT app_private.rls_context() AS claims")).rows[0].claims;
   if(!verifiedClaims || verifiedClaims.role_code!=='owner' || verifiedClaims.actor_staff_id!==ids.staffA || !verifiedClaims.capabilities.includes('staff_admin')) throw new Error('Signed Owner context claims were not verified correctly: '+JSON.stringify(verifiedClaims));
   const visibleOwner=(await runtime.query("SELECT count(*)::int AS n FROM tenant_memberships WHERE tenant_id=$1 AND staff_id=$2 AND role_code='owner' AND status='active'",[ids.tenantA,ids.staffA])).rows[0].n;
@@ -205,8 +205,7 @@ try {
     app_private.rls_context()->>'role_code' AS role_code,
     EXISTS(SELECT 1 FROM tenant_memberships actor_tm WHERE actor_tm.staff_id=$1 AND actor_tm.tenant_id=$2 AND actor_tm.role_code='owner' AND actor_tm.status='active') AS owner_exists`,[ids.staffA,ids.tenantA])).rows[0];
   if(!adminGate.has_admin_cap || adminGate.role_code!=='owner' || !adminGate.owner_exists) throw new Error('Signed Owner RLS gate false: '+JSON.stringify(adminGate));
-  const createdStaff=(await runtime.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00'])).rows[0];
-  ids.staffCreated=createdStaff.id;
+  const createdStaff=(await runtime.query('INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[ids.staffCreated,`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00'])).rows[0];
   const createdMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'cashier') RETURNING id",[ids.tenantA,ids.staffCreated])).rows[0];
   await runtime.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'cashier')",[ids.tenantA,ids.outletA,createdMembership.id]);
   await runtime.query("UPDATE tenant_memberships SET role_code='finance' WHERE id=$1",[createdMembership.id]);
