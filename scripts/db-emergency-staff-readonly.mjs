@@ -39,7 +39,7 @@ try {
 
   const grants = await client.query(`
     SELECT
-      has_table_privilege(current_user,'public.staff_accounts','SELECT') AS can_read_staff,
+      has_any_column_privilege(current_user,'public.staff_accounts','SELECT') AS can_read_staff,
       has_any_column_privilege(current_user,'public.staff_accounts','INSERT') AS can_insert_staff_columns,
       has_any_column_privilege(current_user,'public.staff_accounts','UPDATE') AS can_update_staff_columns,
       has_table_privilege(current_user,'public.tenant_memberships','INSERT') AS can_insert_tenant_memberships,
