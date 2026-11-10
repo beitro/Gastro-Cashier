@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 const { Client } = pg;
 const connectionString = process.env.DATABASE_URL;
@@ -9,6 +9,15 @@ const opts = { connectionString, connectionTimeoutMillis: 10000, statement_timeo
 const admin = new Client(opts), runtime = new Client(opts), contender = new Client(opts);
 const phase = name => console.log(`[db-safety] ${name}`);
 const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
+const contextSecret = randomBytes(32);
+function signedContext(claims) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = Buffer.from(JSON.stringify({v:'1',iat:now,exp:now+60,jti:randomUUID(),...claims})).toString('base64url');
+  return payload + '.' + createHmac('sha256',contextSecret).update(payload).digest('base64url');
+}
+async function applyContext(client, claims) {
+  await client.query("SELECT set_config('app.context_token',$1,true)",[signedContext(claims)]);
+}
 const slug = randomUUID().replaceAll('-','').slice(0,16);
 let createdTestRole = false;
 async function assertDenied(client, sql, values, label) {
@@ -36,6 +45,14 @@ try {
   const view = await admin.query("SELECT reloptions FROM pg_class WHERE oid='public.v_table_board'::regclass");
   if (!view.rows[0]?.reloptions?.includes('security_invoker=true')) throw new Error('v_table_board is not security_invoker');
 
+  phase('provision ephemeral test signing key');
+  await admin.query(
+    `INSERT INTO app_private.rls_context_keys(singleton,secret,updated_at)
+     VALUES(TRUE,$1,now())
+     ON CONFLICT(singleton) DO UPDATE SET secret=EXCLUDED.secret,updated_at=now()`,
+    [contextSecret]
+  );
+
   phase('seed isolated tenant, outlet, staff and session fixtures');
   await admin.query('BEGIN');
   await admin.query('INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3),($4,$5,$6)',[ids.tenantA,`rls-a-${slug}`,'Tenant A',ids.tenantB,`rls-b-${slug}`,'Tenant B']);
@@ -48,6 +65,19 @@ try {
   await admin.query("INSERT INTO staff_sessions(id,staff_id,tenant_id,outlet_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour')",[ids.staffSessionA,ids.staffA,ids.tenantA,ids.outletA,`token-${slug}`]);
   await admin.query('COMMIT');
 
+  phase('verify caller-set legacy GUCs cannot forge capabilities');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantB,ids.outletB]);
+  await runtime.query("SELECT set_config('app.auth_lookup','true',true),set_config('app.bootstrap_mode','true',true),set_config('app.staff_admin','true',true),set_config('app.actor_staff_id',$1,true),set_config('app.session_token_hash',$2,true),set_config('app.auth_rate_limit','true',true)",[ids.staffB,`token-${slug}`]);
+  for (const table of ['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','staff_sessions','dining_tables','auth_rate_limits']) {
+    const result = await runtime.query(`SELECT * FROM ${table}`);
+    if (result.rowCount !== 0) throw new Error(`Legacy GUC forgery leaked ${table}`);
+  }
+  await assertDenied(runtime,'INSERT INTO auth_rate_limits(scope_hash,failed_attempts) VALUES($1,1)',['b'.repeat(64)],'Forged auth rate-limit capability');
+  await assertDenied(runtime,'INSERT INTO tenants(slug,name) VALUES($1,$2)',[`forged-${slug}`,'Forged tenant'],'Forged bootstrap capability');
+  await assertDenied(runtime,'INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3)',[`forged-${slug}@test.invalid`,'Forged staff','scrypt$00$00'],'Forged staff-admin capability');
+  await runtime.query('ROLLBACK');
+
   phase('verify deny-by-default without tenant context');
   await runtime.connect(); await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   for (const table of ['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','staff_sessions','dining_tables','auth_rate_limits']) {
@@ -56,33 +86,33 @@ try {
   }
   await runtime.query('ROLLBACK');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  await runtime.query("SELECT set_config('app.auth_rate_limit','true',true)");
+  await applyContext(runtime,{capabilities:['auth_rate_limit']});
   await runtime.query('INSERT INTO auth_rate_limits(scope_hash,failed_attempts) VALUES($1,1)',[ 'a'.repeat(64) ]);
   if ((await runtime.query('SELECT failed_attempts FROM auth_rate_limits WHERE scope_hash=$1',[ 'a'.repeat(64) ])).rowCount !== 1) throw new Error('Auth rate-limit context could not access its own ledger');
   await runtime.query('ROLLBACK');
 
   phase('verify explicit pre-auth lookup and token-scoped session access');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  await runtime.query("SELECT set_config('app.auth_lookup','true',true)");
+  await applyContext(runtime,{capabilities:['auth_lookup']});
   const candidates = await runtime.query('SELECT id FROM staff_accounts');
   if (candidates.rowCount !== 2) throw new Error('PIN/NFC auth lookup did not see expected credential candidates');
   if ((await runtime.query('SELECT id FROM staff_sessions')).rowCount !== 0) throw new Error('Auth lookup exposed sessions');
   await runtime.query('ROLLBACK');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  await runtime.query("SELECT set_config('app.session_token_hash',$1,true)",[ `token-${slug}` ]);
+  await applyContext(runtime,{capabilities:['session_lookup'],session_token_hash:`token-${slug}`});
   const session = await runtime.query('SELECT id FROM staff_sessions');
   if (session.rowCount !== 1 || session.rows[0].id !== ids.staffSessionA) throw new Error('Session token policy did not isolate a single session');
   await runtime.query('ROLLBACK');
 
   phase('verify tenant context alone cannot enumerate staff sessions');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
   if ((await runtime.query('SELECT id FROM staff_sessions')).rowCount !== 0) throw new Error('Tenant context alone exposed staff sessions');
   await runtime.query('ROLLBACK');
 
   phase('verify tenant/outlet isolation including security-invoker view');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
   const tables = await runtime.query('SELECT id FROM dining_tables');
   if (tables.rowCount !== 1 || tables.rows[0].id !== ids.tableA) throw new Error('Tenant/outlet table read isolation failed');
   const board = await runtime.query('SELECT table_id FROM v_table_board');
@@ -94,12 +124,12 @@ try {
 
   phase('verify cross-tenant and cross-outlet write rejection');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
   await assertDenied(runtime,'INSERT INTO dining_tables(tenant_id,outlet_id,table_code,display_name,capacity) VALUES($1,$2,$3,$4,2)',[ids.tenantB,ids.outletB,`bad-t-${slug}`,'Bad tenant'],'Cross-tenant insert');
   await assertDenied(runtime,'INSERT INTO dining_tables(tenant_id,outlet_id,table_code,display_name,capacity) VALUES($1,$2,$3,$4,2)',[ids.tenantA,ids.outletOtherA,`bad-o-${slug}`,'Bad outlet'],'Cross-outlet insert');
   await runtime.query('ROLLBACK');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
-  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletOtherA]);
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletOtherA,capabilities:['tenant_scope']});
   const outletScopedRows=await runtime.query('SELECT id FROM dining_tables');
   if (outletScopedRows.rowCount !== 1 || outletScopedRows.rows[0].id !== ids.tableOtherA) throw new Error('Wrong outlet context exposed rows outside its own outlet');
   await runtime.query('ROLLBACK');
@@ -109,18 +139,18 @@ try {
   const currentRole=await runtime.query('SELECT current_user,rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user');
   if(currentRole.rows[0].current_user!=='gastro_runtime'||currentRole.rows[0].rolsuper||currentRole.rows[0].rolbypassrls||currentRole.rows[0].rolinherit) throw new Error('Provisioned runtime role attributes are unsafe');
   if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==0 || (await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Production runtime role leaked pre-auth data without context');
-  await runtime.query("SELECT set_config('app.auth_lookup','true',true)");
+  await applyContext(runtime,{capabilities:['auth_lookup']});
   if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==2) throw new Error('Production runtime role cannot perform explicit PIN/NFC lookup');
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Auth lookup exposed production sessions');
-  await runtime.query("SELECT set_config('app.session_token_hash',$1,true)",[ `token-${slug}` ]);
+  await applyContext(runtime,{capabilities:['session_lookup'],session_token_hash:`token-${slug}`});
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==1) throw new Error('Production runtime token lookup failed');
   await assertDenied(runtime,'UPDATE staff_sessions SET staff_id=$1 WHERE token_hash=$2',[ids.staffB,`token-${slug}`],'Runtime session identity mutation');
   await runtime.query("SELECT set_config('app.auth_lookup','false',true)");
-  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
   await runtime.query('UPDATE staff_sessions SET revoked_at=now() WHERE token_hash=$1',[`token-${slug}`]);
   if((await runtime.query('SELECT id FROM staff_sessions WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()',[`token-${slug}`])).rowCount!==0) throw new Error('Revoked session remained active');
-  await runtime.query("SELECT set_config('app.session_token_hash','',true)");
-  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
+  await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,capabilities:['tenant_scope']});
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Tenant/outlet context alone enumerated production sessions');
   if((await runtime.query('SELECT table_id FROM v_table_board')).rowCount!==1) throw new Error('Production runtime role cannot read the secured table-board view');
   if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==1) throw new Error('Production runtime staff tenant isolation failed');
