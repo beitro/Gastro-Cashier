@@ -69,7 +69,6 @@ try {
 
   await runtime.connect();
   phase('verify signed one-time bootstrap capability and tenant-scoped follow-up');
-  await runtime.connect();
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await applyContext(runtime,{capabilities:['bootstrap']});
   await runtime.query('INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3)',[ids.bootstrapTenant,`boot-${slug}`,'Bootstrap test tenant']);
