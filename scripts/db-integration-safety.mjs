@@ -196,6 +196,10 @@ try {
   await runtime.query('ROLLBACK');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',capabilities:['tenant_scope','staff_admin']});
+  const verifiedClaims=(await runtime.query("SELECT app_private.rls_context() AS claims")).rows[0].claims;
+  if(!verifiedClaims || verifiedClaims.role_code!=='owner' || verifiedClaims.actor_staff_id!==ids.staffA || !verifiedClaims.capabilities.includes('staff_admin')) throw new Error('Signed Owner context claims were not verified correctly: '+JSON.stringify(verifiedClaims));
+  const visibleOwner=(await runtime.query("SELECT count(*)::int AS n FROM tenant_memberships WHERE tenant_id=$1 AND staff_id=$2 AND role_code='owner' AND status='active'",[ids.tenantA,ids.staffA])).rows[0].n;
+  if(visibleOwner!==1) throw new Error('Signed Owner context cannot see the active owner membership required by admin RLS policy.');
   const createdStaff=(await runtime.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00'])).rows[0];
   ids.staffCreated=createdStaff.id;
   const createdMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'cashier') RETURNING id",[ids.tenantA,ids.staffCreated])).rows[0];
