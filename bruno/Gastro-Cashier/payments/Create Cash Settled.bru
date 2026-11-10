@@ -1,0 +1,25 @@
+meta {
+  name: Create Cash Settled
+  type: http
+  seq: 5
+}
+post {
+  url: {{baseUrl}}/api/sessions/{{sessionId}}/payments
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{cashierToken}}
+}
+body:json {
+  method: "cash",
+  discountAmount: 0,
+  cashReceived: 100000,
+  idempotencyKey: "audit-cash-001"
+}
+script:post-response {
+  test("cash payment is settled immediately", function() {
+    expect(res.body.status).to.equal("settled");
+    expect(res.body.paid_at).to.be.a("string");
+  });
+}
