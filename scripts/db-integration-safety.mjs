@@ -167,8 +167,9 @@ try {
 
   phase('verify the provisioned gastro_runtime role with production grants');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
-  const currentRole=await runtime.query('SELECT current_user,rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user');
-  if(currentRole.rows[0].current_user!=='gastro_runtime'||currentRole.rows[0].rolsuper||currentRole.rows[0].rolbypassrls||currentRole.rows[0].rolinherit) throw new Error('Provisioned runtime role attributes are unsafe');
+  const currentRole=await runtime.query(`SELECT r.rolname AS current_user,r.rolsuper,r.rolbypassrls,r.rolinherit,EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_memberships FROM pg_roles r WHERE r.rolname=current_user`);
+  const runtimeRole=currentRole.rows[0];
+  if(runtimeRole.current_user!=='gastro_runtime'||runtimeRole.rolsuper||runtimeRole.rolbypassrls||(runtimeRole.rolinherit&&runtimeRole.has_memberships)) throw new Error('Provisioned runtime role attributes are unsafe');
   const keyAccess=await runtime.query("SELECT has_table_privilege(current_user,'app_private.rls_context_keys','SELECT') AS can_read_key");
   if(keyAccess.rows[0].can_read_key) throw new Error('Runtime role can read the private RLS signing key table.');
   if((await runtime.query('SELECT id FROM staff_accounts')).rowCount!==0 || (await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Production runtime role leaked pre-auth data without context');
