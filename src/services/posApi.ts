@@ -185,3 +185,17 @@ export function mapApiMenuToStock(menu: ApiRow[], fallback: MenuItem[]): Record<
   }
   return stock;
 }
+
+export function mapApiMenuToMenuItems(menu: ApiRow[]): MenuItem[] {
+  return menu.map(row => ({
+    id: String(row.sku || row.id),
+    name: String(row.name || 'Menu'),
+    category: row.category_name === 'minuman' ? 'minuman' : row.category_name === 'snack' ? 'snack' : row.category_name === 'dessert' ? 'dessert' : 'makanan',
+    destination: row.destination === 'bar' ? 'bar' : 'kitchen',
+    price: Number(row.price || 0),
+    cost: Number(row.cost_price || 0),
+    stock: 999,
+    image: row.image_url || undefined,
+    description: row.description || undefined,
+  }));
+}
