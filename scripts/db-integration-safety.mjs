@@ -12,8 +12,9 @@ const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), 
 const contextSecret = randomBytes(32);
 function signedContext(claims) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = Buffer.from(JSON.stringify({v:'1',iat:now,exp:now+60,jti:randomUUID(),...claims})).toString('base64url');
-  return payload + '.' + createHmac('sha256',contextSecret).update(payload).digest('base64url');
+  const payloadBytes=Buffer.from(JSON.stringify({v:'1',iat:now,exp:now+60,jti:randomUUID(),...claims}));
+  const payload=payloadBytes.toString('base64url');
+  return payload + '.' + createHmac('sha256',contextSecret).update(payloadBytes).digest('base64url');
 }
 async function applyContext(client, claims) {
   const tx=await client.query('SELECT txid_current()::text AS txid');
