@@ -19,6 +19,8 @@ npm run db:check
 
 The Neon read-only workflow inspects metadata only. It never applies migrations or writes to the hosted database.
 
+When `ENABLE_NEON_READONLY_CHECK=true`, the separate read-only workflow uses `NEON_DATABASE_URL`. Configure that optional secret with a dedicated read-only database role; it is distinct from the deployment-only `NEON_ADMIN_DATABASE_URL`.
+
 ## Baseline migration
 
 `npm run db:migrate` is for a separately confirmed empty database only. It is not appropriate for the existing Neon database.
