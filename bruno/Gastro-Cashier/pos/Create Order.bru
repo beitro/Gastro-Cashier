@@ -1,0 +1,27 @@
+meta {
+  name: Create Order
+  type: http
+  seq: 3
+}
+post {
+  url: {{baseUrl}}/api/sessions/{{sessionId}}/orders
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{cashierToken}}
+}
+body:json {
+  items: [
+    {
+      menuItemId: "{{menuItemId}}",
+      quantity: 1,
+      notes: "Bruno transaction audit"
+    }
+  ],
+  idempotencyKey: "{{idempotencyKey}}"
+}
+script:post-response {
+  bru.setEnvVar("orderItemId", res.body.items[0].id);
+  bru.setEnvVar("batchId", res.body.batch.id);
+}
