@@ -36,6 +36,7 @@ import { GoogleSheetsModal } from './components/GoogleSheetsModal';
 import { LoginModal } from './components/LoginModal';
 import { FinanceView } from './components/FinanceView';
 import { OwnerDashboardView } from './components/OwnerDashboardView';
+import { AdminConsole } from './components/AdminConsole';
 import { MenuStockControl, CancellationRequest } from './components/MenuStockControl';
 
 const STORAGE_KEY_TABLES = 'resto_pos_tables_v1';
@@ -1292,7 +1293,9 @@ export default function App() {
 
       {/* Main Dynamic View: Owner Dashboard, Finance Workspace, or Cashier Floor Plan */}
       <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        {activeTab === 'owner' && currentStaff?.role === 'owner' ? (
+        {activeTab === 'admin' && currentStaff?.role === 'owner' ? (
+          <AdminConsole currentStaff={currentStaff} />
+        ) : activeTab === 'owner' && currentStaff?.role === 'owner' ? (
           <OwnerDashboardView
             currentStaff={currentStaff}
             tables={tables}

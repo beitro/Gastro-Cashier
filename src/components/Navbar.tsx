@@ -14,12 +14,13 @@ import {
   FileSpreadsheet,
   Crown,
   Lock,
+  ShieldCheck,
 } from 'lucide-react';
 import { PaymentFlowMode, Table, StaffAccount } from '../types/pos';
 import { downloadFigmaWireframe } from '../utils/figmaWireframe';
 import { sounds } from '../utils/soundEffects';
 
-export type NavTabId = 'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory' | 'owner' | 'finance';
+export type NavTabId = 'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory' | 'owner' | 'admin' | 'finance';
 
 interface NavbarProps {
   tables: Table[];
@@ -95,6 +96,12 @@ export const Navbar: React.FC<NavbarProps> = ({
       id: 'owner',
       label: 'Cockpit Owner',
       icon: <Crown className="w-4 h-4 stroke-[2.2] text-amber-500" />,
+      roles: ['owner'],
+    },
+    {
+      id: 'admin',
+      label: 'Admin & Staff',
+      icon: <ShieldCheck className="w-4 h-4 stroke-[2]" />,
       roles: ['owner'],
     },
     {
