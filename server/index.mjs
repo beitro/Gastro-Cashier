@@ -341,11 +341,13 @@ async function assertSafeRuntimeRole() {
     SELECT r.rolsuper,r.rolbypassrls,r.rolinherit,
       EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S') AND c.relowner=r.oid) AS owns_public_objects,
       EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=r.oid) AS owns_public_schema,
-      EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_role_memberships
+      EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_role_memberships,
+      has_schema_privilege(current_user,'public','CREATE') AS can_create_public_objects,
+      has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schemas
     FROM pg_roles r WHERE r.rolname=current_user
   `);
   const role=result.rows[0];
-  if (!role || role.rolsuper || role.rolbypassrls || role.rolinherit || role.owns_public_objects || role.owns_public_schema || role.has_role_memberships) {
+  if (!role || role.rolsuper || role.rolbypassrls || role.rolinherit || role.owns_public_objects || role.owns_public_schema || role.has_role_memberships || role.can_create_public_objects || role.can_create_schemas) {
     throw new Error('Unsafe DATABASE_URL role. API requires a dedicated non-owner role with NOSUPERUSER, NOBYPASSRLS, NOINHERIT and no privileged role memberships.');
   }
 }
