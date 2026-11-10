@@ -24,7 +24,11 @@ try {
   await admin.query("SET lock_timeout='8s'; SET idle_in_transaction_session_timeout='30s'");
   const testRoleExists = await admin.query("SELECT 1 FROM pg_roles WHERE rolname='gastro_runtime_test'");
   createdTestRole = testRoleExists.rowCount === 0;
-  await admin.query(`DO $ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='gastro_runtime_test') THEN CREATE ROLE gastro_runtime_test NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $; ALTER ROLE gastro_runtime_test NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION; GRANT USAGE ON SCHEMA public TO gastro_runtime_test; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO gastro_runtime_test; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO gastro_runtime_test;`);
+  if (createdTestRole) await admin.query('CREATE ROLE gastro_runtime_test NOLOGIN NOSUPERUSER NOBYPASSRLS');
+  await admin.query('ALTER ROLE gastro_runtime_test NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION');
+  await admin.query('GRANT USAGE ON SCHEMA public TO gastro_runtime_test');
+  await admin.query('GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO gastro_runtime_test');
+  await admin.query('GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO gastro_runtime_test');
   const role = await admin.query("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname='gastro_runtime_test'");
   if (role.rows[0].rolsuper || role.rows[0].rolbypassrls) throw new Error('Runtime role can bypass RLS');
   const tableAudit = await admin.query("SELECT count(*)::int AS total,count(*) FILTER (WHERE relrowsecurity AND relforcerowsecurity)::int AS protected FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p')");
