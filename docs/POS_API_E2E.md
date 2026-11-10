@@ -48,3 +48,27 @@ The test performs PIN login, reads the table/menu catalogs, opens a table sessio
 - Payment First remains disabled until the backend supports payment-first/partial-payment sessions.
 - Inventory stock is not yet supplied/enforced by the menu API; the current test catalog is not a stock-control implementation.
 - The E2E command requires the development API's HMAC/runtime-role configuration. Do not bypass those startup checks to run the test.
+
+
+## Development branch security prerequisites
+
+For legacy development branches whose schema predates the canonical baseline, apply
+`db/migrations/003_auth_support_tables.sql` before
+`db/migrations/003_staff_admin_management.sql` and
+`db/migrations/004_signed_rls_context.sql`. The support migration creates the
+persistent staff-session and auth-rate-limit tables idempotently and enables
+forced RLS on staff credentials. Missing signed context must remain default-deny.
+
+Do not enable staff mutations or remove the emergency HTTP 423 guard until all
+of the following are verified on the same development branch:
+- `app_private.rls_context_keys` contains the provisioned HMAC key (key material
+  is never committed or printed).
+- The API runtime uses the same `RLS_CONTEXT_HMAC_SECRET` and a dedicated
+  `gastro_runtime` login with `NOSUPERUSER NOBYPASSRLS NOINHERIT`, no ownership,
+  and no privileged role memberships.
+- Narrow staff/membership DML grants and signed owner-only RLS policies are
+  tested for owner allow, cashier/finance deny, and cross-tenant/outlet deny.
+- The admin create/update API tests and POS transaction E2E pass.
+
+The development migration does not authorize production changes, merge, or
+deployment.
