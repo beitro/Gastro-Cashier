@@ -596,6 +596,26 @@ app.patch('/api/order-items/:itemId/cancel', authenticate, requireManagerOrOwner
   res.status(result.status).json(result.body);
 }));
 
+app.patch('/api/payments/:paymentId/void', authenticate, requireSettlementRole, asyncRoute(async(req,res)=>{
+  const reason=String(req.body?.reason||'').trim();
+  if(reason.length<3||reason.length>500) return res.status(400).json({error:'Alasan void 3–500 karakter wajib diisi.'});
+  const result=await scoped(req,async c=>{
+    const ref=await c.query('SELECT session_id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId]);
+    if(!ref.rowCount) return {status:404,body:{error:'Pembayaran tidak ditemukan.'}};
+    const session=await c.query('SELECT id,status FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,ref.rows[0].session_id]);
+    const payment=await c.query('SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId]);
+    if(payment.rows[0].status==='voided') return {status:200,body:{ok:true,alreadyVoided:true,payment:payment.rows[0]}};
+    if(payment.rows[0].status!=='pending'||!session.rowCount||!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Hanya pembayaran pending pada sesi yang belum ditutup dapat di-void.'}};
+    const updated=(await c.query("UPDATE payments SET status='voided',settlement_note=$1 WHERE tenant_id=$2 AND outlet_id=$3 AND id=$4 RETURNING *",
+      [reason,req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId])).rows[0];
+    await c.query("UPDATE dining_sessions SET status='active',version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'payment.voided','payment',$4,$5::jsonb)",
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.paymentId,JSON.stringify({reason,method:updated.method})]);
+    return {status:200,body:{ok:true,payment:updated,sessionReopened:true}};
+  });
+  res.status(result.status).json(result.body);
+}));
+
 app.patch('/api/payments/:paymentId/settle', authenticate, requireSettlementRole, asyncRoute(async(req,res)=>{
   const providerReference=String(req.body?.providerReference||'').trim();
   const settlementNote=req.body?.note?String(req.body.note).trim():null;
