@@ -63,6 +63,7 @@ function mapOrder(row: ApiRow): OrderItem {
     batchNumber: Number(row.batch_number || 1),
     isServed: Boolean(row.is_served),
     cookingStatus: row.cooking_status || 'queue',
+    servedAt: row.served_at || undefined,
   };
 }
 
