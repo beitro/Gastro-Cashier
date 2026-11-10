@@ -215,12 +215,12 @@ app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>
   res.json(rows.rows);
 }));
 app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
-  const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null;
+  const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null,phone=req.body?.phone?String(req.body.phone).trim():null;
   const role=req.body?.role,pin=String(req.body?.pin||'');
   if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email))))return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
   const created=await adminScoped(req,async c=>{
-    const a=(await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[email,name,pinHash])).rows[0];
+    const a=(await c.query('INSERT INTO staff_accounts(email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[email,phone,name,pinHash])).rows[0];
     const tm=(await c.query('INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,$3) RETURNING id',[req.auth.tenant_id,a.id,role])).rows[0];
     await c.query('INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,$4)',[req.auth.tenant_id,req.auth.outlet_id,tm.id,role]);
     return {id:a.id};
