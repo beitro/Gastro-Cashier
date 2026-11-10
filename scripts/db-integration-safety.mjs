@@ -66,6 +66,7 @@ try {
   await admin.query("INSERT INTO staff_sessions(id,staff_id,tenant_id,outlet_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour')",[ids.staffSessionA,ids.staffA,ids.tenantA,ids.outletA,`token-${slug}`]);
   await admin.query('COMMIT');
 
+  await runtime.connect();
   phase('verify caller-set legacy GUCs cannot forge capabilities');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantB,ids.outletB]);
@@ -80,7 +81,7 @@ try {
   await runtime.query('ROLLBACK');
 
   phase('verify deny-by-default without tenant context');
-  await runtime.connect(); await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
+  await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime_test');
   for (const table of ['tenants','outlets','tenant_memberships','outlet_memberships','staff_accounts','staff_sessions','dining_tables','auth_rate_limits']) {
     const result = await runtime.query(`SELECT * FROM ${table}`);
     if (result.rowCount !== 0) throw new Error(`No-context query leaked ${table}`);
