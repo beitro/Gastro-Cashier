@@ -178,7 +178,7 @@ export function mapPaymentToTransaction(transaction: Transaction, payment: ApiRo
     status: 'settled',
     isPaid: true,
     paidAt: payment.paid_at,
-    paymentMethod: payment.method === 'transfer' || payment.method === 'other' ? 'card' : payment.method,
+    paymentMethod: payment.method === 'other' ? 'card' : payment.method,
     cashGiven: Number(payment.cash_received || 0),
     changeAmount: Number(payment.change_amount || 0),
     discountAmount: Number(payment.discount_amount || 0),
