@@ -44,6 +44,8 @@ assert.equal(winningOrder.items.length,1);
 const replay=await order(winningSession.id,winningKey);
 assert.equal(replay.status,200,'Same order idempotency key must replay the stored response');
 assert.equal(replay.body.batch.id,winningOrder.batch.id,'Order replay must not create another batch');
+const crossSessionReplay=await order(losingSession.id,winningKey);
+assert.equal(crossSessionReplay.status,409,'An order idempotency key must not replay into a different dining session');
 let liveMenu=await ok('/api/menu',{token});
 assert.equal(Number(liveMenu.find(x=>x.id===item.id).stock_quantity),0,'Stock must be zero after one successful concurrent order');
 
