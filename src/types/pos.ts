@@ -114,7 +114,7 @@ export interface Transaction {
   totalAmount: number;
   // Settlement info
   paidAt?: string;
-  paymentMethod?: 'cash' | 'qris' | 'card' | 'split';
+  paymentMethod?: 'cash' | 'qris' | 'card' | 'transfer' | 'split';
   cashGiven?: number;
   changeAmount?: number;
   cashierName?: string;
