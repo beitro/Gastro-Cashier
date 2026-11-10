@@ -32,7 +32,7 @@ try {
     `GRANT UPDATE (email,phone,display_name,status,pin_hash,nfc_credential_hash) ON staff_accounts TO ${ident(roleName)}`,
     `GRANT INSERT ON tenant_memberships,outlet_memberships TO ${ident(roleName)}`,
     `GRANT UPDATE (role_code,status) ON tenant_memberships,outlet_memberships TO ${ident(roleName)}`,
-    `GRANT INSERT ON dining_sessions,order_batches,order_items,payments,payment_allocations,staff_sessions TO ${ident(roleName)}`,
+    `GRANT INSERT ON dining_sessions,order_batches,order_items,payments,payment_allocations,staff_sessions,audit_logs TO ${ident(roleName)}`,
     `GRANT UPDATE ON dining_sessions,order_items,auth_rate_limits TO ${ident(roleName)}`,
     `GRANT UPDATE (revoked_at) ON staff_sessions TO ${ident(roleName)}`,
     `GRANT INSERT ON auth_rate_limits TO ${ident(roleName)}`,
