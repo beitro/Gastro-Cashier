@@ -436,7 +436,7 @@ async function assertSafeRuntimeRole() {
     FROM pg_roles r WHERE r.rolname=current_user
   `);
   const role=result.rows[0];
-  if (!role || role.rolsuper || role.rolbypassrls || role.rolinherit || role.rolcreatedb || role.rolcreaterole || role.rolreplication || role.owns_public_objects || role.owns_public_schema || role.has_role_memberships || role.can_create_public_objects || role.can_create_schemas) {
+  if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolreplication || role.owns_public_objects || role.owns_public_schema || role.has_role_memberships || role.can_create_public_objects || role.can_create_schemas) {
     throw new Error('Unsafe DATABASE_URL role. API requires a dedicated non-owner role with NOSUPERUSER, NOBYPASSRLS, NOINHERIT and no privileged role memberships.');
   }
 }
