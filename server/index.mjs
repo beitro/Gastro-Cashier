@@ -361,6 +361,34 @@ app.get('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRo
     [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]));
   res.json(rows.rows);
 }));
+
+app.patch('/api/sessions/:sessionId/orders/:itemId', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+  const { cookingStatus, isServed } = req.body || {};
+  const allowedStatuses = ['queue','cooking','ready','handed_off'];
+  if ((cookingStatus !== undefined && !allowedStatuses.includes(cookingStatus)) ||
+      (isServed !== undefined && typeof isServed !== 'boolean') ||
+      (cookingStatus === undefined && isServed === undefined)) {
+    return res.status(400).json({ error:'Status pesanan tidak valid.' });
+  }
+  const updated = await scoped(req, async c => {
+    const session = await c.query(
+      "SELECT id FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing')",
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]
+    );
+    if (!session.rowCount) return null;
+    const result = await c.query(`UPDATE order_items
+      SET cooking_status=COALESCE($5,cooking_status),
+          is_served=COALESCE($6,is_served),
+          served_at=CASE WHEN $6 IS TRUE THEN COALESCE(served_at,now()) WHEN $6 IS FALSE THEN NULL ELSE served_at END
+      WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND id=$4
+      RETURNING id,cooking_status,is_served,served_at`,
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,req.params.itemId,cookingStatus ?? null,isServed ?? null]
+    );
+    return result.rows[0] || null;
+  });
+  if (!updated) return res.status(404).json({ error:'Sesi atau item pesanan tidak ditemukan.' });
+  res.json(updated);
+}));
 app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const { items, note } = req.body || {};
   if (!Array.isArray(items) || !items.length || items.length>100) return res.status(400).json({error:'items harus berisi 1–100 item.'});
