@@ -192,11 +192,12 @@ try {
   phase('verify signed Owner capability and reject signed non-Owner staff administration');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'cashier',capabilities:['tenant_scope','staff_admin']});
-  await assertDenied(runtime,'INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`cashier-forged-${slug}@test.invalid`,'Forged Admin','scrypt$00$00'],'Signed non-Owner staff creation');
+  await assertDenied(runtime,'INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3)',[`cashier-forged-${slug}@test.invalid`,'Forged Admin','scrypt$00$00'],'Signed non-Owner staff creation');
   await runtime.query('ROLLBACK');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
   await applyContext(runtime,{tenant_id:ids.tenantA,outlet_id:ids.outletA,actor_staff_id:ids.staffA,role_code:'owner',capabilities:['tenant_scope','staff_admin']});
-  await runtime.query('INSERT INTO staff_accounts(id,email,display_name,pin_hash) VALUES($1,$2,$3,$4)',[ids.staffCreated,`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00']);
+  const createdStaff=(await runtime.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[`owner-created-${slug}@test.invalid`,'Owner-created staff','scrypt$00$00'])).rows[0];
+  ids.staffCreated=createdStaff.id;
   const createdMembership=(await runtime.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'cashier') RETURNING id",[ids.tenantA,ids.staffCreated])).rows[0];
   await runtime.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'cashier')",[ids.tenantA,ids.outletA,createdMembership.id]);
   await runtime.query("UPDATE tenant_memberships SET role_code='finance' WHERE id=$1",[createdMembership.id]);
