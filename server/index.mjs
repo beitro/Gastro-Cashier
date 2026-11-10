@@ -19,6 +19,12 @@ const bootstrapPool = process.env.BOOTSTRAP_DATABASE_URL ? new Pool({ connection
 const scrypt = promisify(scryptCallback);
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const normalizeRole = (role) => role === 'owner' || role === 'admin' || role === 'manager' ? 'owner' : role === 'finance' ? 'finance' : 'cashier';
+function requirePosRole(req, res, next) {
+  if (!req.auth || !['owner','cashier'].includes(normalizeRole(req.auth.role_code))) {
+    return res.status(403).json({ error:'Role Anda tidak memiliki izin untuk operasi POS.' });
+  }
+  next();
+}
 
 async function hashCredential(value) {
   const salt = randomBytes(16);
@@ -193,21 +199,21 @@ async function scoped(req, fn) {
     return fn(c);
   });
 }
-app.get('/api/menu', authenticate, asyncRoute(async (req,res) => {
+app.get('/api/menu', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT m.id,m.sku,m.name,m.description,m.destination,m.price,m.cost_price,m.image_url,m.category_id,c.name AS category_name
     FROM menu_items m LEFT JOIN menu_categories c ON c.tenant_id=m.tenant_id AND c.id=m.category_id
     WHERE m.tenant_id=$1 AND (m.outlet_id IS NULL OR m.outlet_id=$2) AND m.is_available=true
     ORDER BY c.sort_order NULLS LAST,m.sort_order,m.name`,[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
-app.get('/api/sessions', authenticate, asyncRoute(async (req,res) => {
+app.get('/api/sessions', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT s.*,t.table_code,t.display_name AS table_name
     FROM dining_sessions s JOIN dining_tables t ON t.tenant_id=s.tenant_id AND t.outlet_id=s.outlet_id AND t.id=s.table_id
     WHERE s.tenant_id=$1 AND s.outlet_id=$2 AND s.status IN ('active','billing')
     ORDER BY s.opened_at DESC`,[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
-app.post('/api/sessions', authenticate, asyncRoute(async (req,res) => {
+app.post('/api/sessions', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const { tableId, guestCount=1, waiterStaffId } = req.body || {};
   if (!tableId || !Number.isInteger(guestCount) || guestCount<1 || guestCount>100) return res.status(400).json({error:'tableId dan guestCount (1–100) wajib valid.'});
   const result = await scoped(req, async c => {
@@ -231,7 +237,7 @@ app.post('/api/sessions', authenticate, asyncRoute(async (req,res) => {
   });
   res.status(result.status).json(result.body);
 }));
-app.get('/api/sessions/:sessionId/orders', authenticate, asyncRoute(async (req,res) => {
+app.get('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT b.id AS batch_id,b.batch_number,b.status AS batch_status,b.note,b.created_at,
     oi.id,oi.menu_item_id,oi.item_name_snapshot,oi.category_snapshot,oi.destination,oi.unit_price,oi.quantity,oi.modifier_total,oi.line_total,oi.notes,oi.cooking_status,oi.is_served
     FROM order_batches b LEFT JOIN order_items oi ON oi.tenant_id=b.tenant_id AND oi.outlet_id=b.outlet_id AND oi.batch_id=b.id
@@ -239,7 +245,7 @@ app.get('/api/sessions/:sessionId/orders', authenticate, asyncRoute(async (req,r
     [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]));
   res.json(rows.rows);
 }));
-app.post('/api/sessions/:sessionId/orders', authenticate, asyncRoute(async (req,res) => {
+app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const { items, note } = req.body || {};
   if (!Array.isArray(items) || !items.length || items.length>100) return res.status(400).json({error:'items harus berisi 1–100 item.'});
   for (const item of items) if (!item.menuItemId || !Number.isInteger(item.quantity) || item.quantity<1 || item.quantity>999) return res.status(400).json({error:'Setiap item memerlukan menuItemId dan quantity 1–999.'});
@@ -269,14 +275,19 @@ app.post('/api/sessions/:sessionId/orders', authenticate, asyncRoute(async (req,
   res.status(result.status).json(result.body);
 }));
 
-app.post('/api/sessions/:sessionId/payments', authenticate, asyncRoute(async (req,res) => {
+app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const { method, discountAmount=0, cashReceived, idempotencyKey, cardBank } = req.body || {};
   if (!['cash','qris','card','transfer','other'].includes(method) || typeof idempotencyKey!=='string' || idempotencyKey.length<8 || idempotencyKey.length>128 || !Number.isFinite(Number(discountAmount)) || Number(discountAmount)<0) return res.status(400).json({error:'Metode, idempotencyKey (8–128 karakter), atau diskon tidak valid.'});
   const result=await scoped(req,async c=>{
     const existing=await c.query('SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND idempotency_key=$3',[req.auth.tenant_id,req.auth.outlet_id,idempotencyKey]);
     if(existing.rowCount) {
-      if (existing.rows[0].session_id !== req.params.sessionId) return {status:409,body:{error:'Idempotency key sudah digunakan untuk sesi transaksi lain.'}};
-      return {status:200,body:existing.rows[0]};
+      const prior=existing.rows[0];
+      const sameRequest = prior.session_id === req.params.sessionId &&
+        prior.method === method && Number(prior.discount_amount) === Number(discountAmount) &&
+        (method !== 'cash' || Number(prior.cash_received) === Number(cashReceived)) &&
+        (prior.card_bank || null) === (cardBank || null);
+      if (!sameRequest) return {status:409,body:{error:'Idempotency key sudah digunakan untuk payload pembayaran yang berbeda.'}};
+      return {status:200,body:prior};
     }
     const session=await c.query("SELECT * FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing') FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     if(!session.rowCount) return {status:404,body:{error:'Sesi meja tidak ditemukan atau sudah ditutup.'}};
@@ -300,7 +311,7 @@ app.post('/api/sessions/:sessionId/payments', authenticate, asyncRoute(async (re
   res.status(result.status).json(result.body);
 }));
 
-app.patch('/api/order-items/:itemId/kitchen-status', authenticate, asyncRoute(async (req,res) => {
+app.patch('/api/order-items/:itemId/kitchen-status', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const allowed=['queue','cooking','ready','handed_off','cancelled'];
   const status=req.body?.status;
   if (!allowed.includes(status)) return res.status(400).json({error:'Status KDS tidak valid.'});
@@ -311,7 +322,7 @@ app.patch('/api/order-items/:itemId/kitchen-status', authenticate, asyncRoute(as
 }));
 
 // All outlet data endpoints set transaction-local RLS context after resolving the server-side session.
-app.get('/api/tables', authenticate, asyncRoute(async (req,res) => {
+app.get('/api/tables', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await transaction(async c => {
     await c.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[req.auth.tenant_id,req.auth.outlet_id]);
     return (await c.query('SELECT * FROM v_table_board WHERE tenant_id=$1 AND outlet_id=$2 ORDER BY table_code',[req.auth.tenant_id,req.auth.outlet_id])).rows;
