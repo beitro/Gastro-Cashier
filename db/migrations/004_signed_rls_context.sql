@@ -166,6 +166,12 @@ CREATE POLICY tenant_membership_admin_update ON public.tenant_memberships FOR UP
     app_private.rls_context()->'capabilities' ? 'staff_admin'
     AND app_private.rls_context()->>'role_code' = 'owner'
     AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+    AND EXISTS (
+      SELECT 1 FROM public.tenant_memberships actor_tm
+      WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
+        AND actor_tm.tenant_id = tenant_memberships.tenant_id
+        AND actor_tm.role_code = 'owner' AND actor_tm.status = 'active'
+    )
   );
 
 CREATE POLICY outlet_membership_scope_or_auth_lookup ON public.outlet_memberships FOR SELECT
@@ -185,6 +191,12 @@ CREATE POLICY outlet_membership_admin_insert ON public.outlet_memberships FOR IN
     AND app_private.rls_context()->>'role_code' = 'owner'
     AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
     AND outlet_id = NULLIF(app_private.rls_context()->>'outlet_id','')::UUID
+    AND EXISTS (
+      SELECT 1 FROM public.tenant_memberships actor_tm
+      WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
+        AND actor_tm.tenant_id = outlet_memberships.tenant_id
+        AND actor_tm.role_code = 'owner' AND actor_tm.status = 'active'
+    )
   );
 CREATE POLICY outlet_membership_admin_update ON public.outlet_memberships FOR UPDATE
   USING (
@@ -198,6 +210,12 @@ CREATE POLICY outlet_membership_admin_update ON public.outlet_memberships FOR UP
     AND app_private.rls_context()->>'role_code' = 'owner'
     AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
     AND outlet_id = NULLIF(app_private.rls_context()->>'outlet_id','')::UUID
+    AND EXISTS (
+      SELECT 1 FROM public.tenant_memberships actor_tm
+      WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
+        AND actor_tm.tenant_id = outlet_memberships.tenant_id
+        AND actor_tm.role_code = 'owner' AND actor_tm.status = 'active'
+    )
   );
 
 -- Tenant-only and tenant/outlet data.
