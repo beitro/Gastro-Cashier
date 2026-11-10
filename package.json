@@ -13,7 +13,8 @@
     "start:dev": "node --watch server/index.mjs",
     "db:check": "node scripts/db-check.mjs",
     "db:migrate": "node scripts/db-migrate.mjs",
-    "db:provision-runtime-role": "node scripts/db-provision-runtime-role.mjs"
+    "db:provision-runtime-role": "node scripts/db-provision-runtime-role.mjs",
+    "db:provision-rls-context-key": "node scripts/db-provision-rls-context-key.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
