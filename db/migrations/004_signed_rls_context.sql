@@ -98,7 +98,7 @@ BEGIN
         'outlet_membership_scope_or_auth_lookup','staff_auth_or_tenant_scope',
         'staff_bootstrap_insert','staff_session_insert','staff_session_select_own',
         'staff_session_revoke_own','auth_rate_limit_private','staff_admin_insert',
-        'staff_admin_update','tenant_bootstrap_insert',
+        'staff_admin_update','tenant_bootstrap_insert','outlet_bootstrap_insert',
         'tenant_membership_bootstrap_insert','outlet_membership_bootstrap_insert',
         'tenant_membership_admin_insert','tenant_membership_admin_update',
         'outlet_membership_admin_insert','outlet_membership_admin_update',
@@ -142,18 +142,24 @@ CREATE POLICY tenant_membership_admin_insert ON public.tenant_memberships FOR IN
     app_private.rls_context()->'capabilities' ? 'staff_admin'
     AND app_private.rls_context()->>'role_code' = 'owner'
     AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
-    AND staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
-      OR (
-        app_private.rls_context()->'capabilities' ? 'staff_admin'
-        AND app_private.rls_context()->>'role_code' = 'owner'
-        AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
-      )
+    AND EXISTS (
+      SELECT 1 FROM public.tenant_memberships actor_tm
+      WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
+        AND actor_tm.tenant_id = tenant_memberships.tenant_id
+        AND actor_tm.role_code = 'owner' AND actor_tm.status = 'active'
+    )
   );
 CREATE POLICY tenant_membership_admin_update ON public.tenant_memberships FOR UPDATE
   USING (
     app_private.rls_context()->'capabilities' ? 'staff_admin'
     AND app_private.rls_context()->>'role_code' = 'owner'
     AND tenant_id = NULLIF(app_private.rls_context()->>'tenant_id','')::UUID
+    AND EXISTS (
+      SELECT 1 FROM public.tenant_memberships actor_tm
+      WHERE actor_tm.staff_id = NULLIF(app_private.rls_context()->>'actor_staff_id','')::UUID
+        AND actor_tm.tenant_id = tenant_memberships.tenant_id
+        AND actor_tm.role_code = 'owner' AND actor_tm.status = 'active'
+    )
   )
   WITH CHECK (
     app_private.rls_context()->'capabilities' ? 'staff_admin'
