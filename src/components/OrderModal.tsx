@@ -8,7 +8,6 @@ import {
   PaymentFlowMode,
   DiscountType,
 } from '../types/pos';
-import { MENU_ITEMS } from '../data/initialData';
 import {
   formatRupiah,
   calculateItemSubtotal,
@@ -43,6 +42,7 @@ import { nextBatchNumber } from '../utils/auditFlow';
 
 interface OrderModalProps {
   table: Table;
+  menuItems: MenuItem[];
   existingTransaction?: Transaction;
   menuStock: Record<string, number>;
   staffName?: string;
@@ -72,6 +72,7 @@ interface OrderModalProps {
 
 export const OrderModal: React.FC<OrderModalProps> = ({
   table,
+  menuItems,
   existingTransaction,
   menuStock,
   staffName,
@@ -112,7 +113,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
     notes: string;
   } | null>(null);
 
-  const filteredMenuItems = MENU_ITEMS.filter((item) => {
+  const filteredMenuItems = menuItems.filter((item) => {
     if (categoryFilter !== 'all' && item.category !== categoryFilter) return false;
     if (searchQuery.trim() !== '') {
       return item.name.toLowerCase().includes(searchQuery.toLowerCase());
