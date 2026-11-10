@@ -339,7 +339,7 @@ app.use((err, _req, res, _next) => {
 async function assertSafeRuntimeRole() {
   const result = await pool.query(`
     SELECT r.rolsuper,r.rolbypassrls,r.rolinherit,
-      EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') AND c.relowner=r.oid) AS owns_public_objects,
+      EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S') AND c.relowner=r.oid) AS owns_public_objects,
       EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND n.nspowner=r.oid) AS owns_public_schema,
       EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AS has_role_memberships
     FROM pg_roles r WHERE r.rolname=current_user
