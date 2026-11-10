@@ -20,7 +20,9 @@ try {
     `GRANT USAGE ON SCHEMA public TO ${ident(roleName)}`,
     `GRANT SELECT ON tenants,outlets,staff_accounts,tenant_memberships,outlet_memberships,tenant_settings,outlet_settings,menu_categories,menu_items,dining_tables,dining_sessions,order_batches,order_items,payments,v_table_board,staff_sessions TO ${ident(roleName)}`,
     `GRANT INSERT ON dining_sessions,order_batches,order_items,payments,payment_allocations,staff_sessions TO ${ident(roleName)}`,
-    `GRANT UPDATE ON dining_sessions,order_items,staff_sessions TO ${ident(roleName)}`
+    `GRANT UPDATE ON dining_sessions,order_items,staff_sessions,auth_rate_limits TO ${ident(roleName)}`,
+    `GRANT INSERT ON auth_rate_limits TO ${ident(roleName)}`,
+    `GRANT SELECT ON auth_rate_limits TO ${ident(roleName)}`
   ];
   for (const sql of grants) await client.query(sql);
   const result=await client.query('SELECT rolname,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolinherit FROM pg_roles WHERE rolname=$1',[roleName]);
