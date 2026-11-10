@@ -434,7 +434,11 @@ app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncR
     const existing = await c.query('SELECT operation,response_status,response_body,expires_at FROM idempotency_keys WHERE tenant_id=$1 AND outlet_id=$2 AND key=$3',[req.auth.tenant_id,req.auth.outlet_id,idempotencyKey]);
     if (existing.rowCount && new Date(existing.rows[0].expires_at)>new Date()) {
       if (existing.rows[0].operation!=='create_order') return {status:409,body:{error:'Idempotency key sudah digunakan untuk operasi berbeda.'}};
-      if (existing.rows[0].response_body) return {status:200,body:existing.rows[0].response_body};
+      if (existing.rows[0].response_body) {
+        const priorSessionId=existing.rows[0].response_body?.batch?.session_id;
+        if (priorSessionId!==req.params.sessionId) return {status:409,body:{error:'Idempotency key sudah terikat ke sesi meja lain.'}};
+        return {status:200,body:existing.rows[0].response_body};
+      }
       return {status:409,body:{error:'Permintaan dengan idempotency key ini sedang diproses.'}};
     }
     const session = await c.query("SELECT id FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status='active' FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
