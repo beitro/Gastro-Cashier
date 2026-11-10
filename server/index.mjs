@@ -262,7 +262,9 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
     if(tenantCount.rows[0].count>1)return 'multi';
     const sets=[],values=[req.params.staffId];
     if(pinHash){values.push(pinHash);sets.push('pin_hash=$'+values.length);}
-    if(nfcHash){values.push(nfcHash);sets.push('nfc_credential_hash=
+    if(nfcHash){values.push(nfcHash);sets.push('nfc_credential_hash=$'+values.length);}
+    if(clearNfc)sets.push('nfc_credential_hash=NULL');
+    await c.query('UPDATE staff_accounts SET '+sets.join(',')+' WHERE id=$1',values);
     await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);
     return true;
   });
