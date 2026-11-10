@@ -89,7 +89,7 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
   if (!process.env.BOOTSTRAP_TOKEN || req.get('x-bootstrap-token') !== process.env.BOOTSTRAP_TOKEN) return res.status(403).json({ error: 'Bootstrap tidak diizinkan.' });
   if (!bootstrapPool) return res.status(503).json({ error: 'Bootstrap nonaktif: BOOTSTRAP_DATABASE_URL belum dikonfigurasi.' });
   const { tenantName, tenantSlug, outletName, outletSlug, staffName, email, pin, nfcUid } = req.body || {};
-  if (![tenantName,tenantSlug,outletName,outletSlug,staffName,pin].every(v => typeof v === 'string' && v.trim()) || !/^\d{4,8}$/.test(pin)) return res.status(400).json({ error: 'Data tenant/outlet/staff wajib diisi; PIN 4–8 digit.' });
+  if (![tenantName,tenantSlug,outletName,outletSlug,staffName,pin].every(v => typeof v === 'string' && v.trim()) || !/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'Data tenant/outlet/staff wajib diisi; PIN 4–8 digit.' });
   const pinHash = await hashCredential(pin);
   const nfcHash = nfcUid ? await hashCredential(String(nfcUid).trim().toUpperCase()) : null;
   const created = await transaction(async c => {
@@ -161,7 +161,7 @@ async function issueSession(staffId, credentialColumn, credential, res) {
 
 app.post('/api/auth/pin', asyncRoute(async (req,res) => {
   const pin = String(req.body?.pin || '');
-  if (!/^\d{4,8}$/.test(pin)) return res.status(400).json({ error:'PIN harus 4–8 digit.' });
+  if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error:'PIN harus 4–8 digit.' });
   const retryAfter = await consumeAuthAttempt(req);
   if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
   const candidates = await transaction(async c => { await c.query("SELECT set_config('app.auth_lookup','true',true)"); return c.query("SELECT id,pin_hash FROM staff_accounts WHERE status='active' AND pin_hash IS NOT NULL"); });
@@ -217,7 +217,7 @@ app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>
 app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null,phone=req.body?.phone?String(req.body.phone).trim():null;
   const role=req.body?.role,pin=String(req.body?.pin||'');
-  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)||(!email&&!phone)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone))))return res.status(400).json({error:'Nama, kontak (email/telepon), role, atau PIN tidak valid.'});
+  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4}$/.test(pin)||(!email&&!phone)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone))))return res.status(400).json({error:'Nama, kontak (email/telepon), role, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
   const created=await adminScoped(req,async c=>{
     const a=(await c.query('INSERT INTO staff_accounts(email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4) RETURNING id',[email,phone,name,pinHash])).rows[0];
@@ -252,7 +252,7 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
 app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const pin=req.body?.pin===undefined?null:String(req.body.pin),uid=req.body?.nfcUid===undefined?null:String(req.body.nfcUid).trim().toUpperCase(),clearNfc=req.body?.clearNfc===true;
   if(pin===null&&uid===null&&!clearNfc)return res.status(400).json({error:'PIN baru atau NFC UID wajib diisi.'});
-  if(pin!==null&&!/^\d{4,8}$/.test(pin))return res.status(400).json({error:'PIN harus 4–8 digit.'});
+  if(pin!==null&&!/^\d{4}$/.test(pin))return res.status(400).json({error:'PIN harus 4–8 digit.'});
   if(uid!==null&&(!uid||uid.length>200))return res.status(400).json({error:'NFC UID tidak valid.'});
   const pinHash=pin===null?null:await hashCredential(pin),nfcHash=uid===null?null:await hashCredential(uid);
   const result=await adminScoped(req,async c=>{
