@@ -4,11 +4,13 @@ import { randomUUID } from 'node:crypto';
 const { Client } = pg;
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
+if (process.env.DB_SAFETY_ALLOW_MUTATIONS !== 'YES') throw new Error('Refusing fixture writes: set DB_SAFETY_ALLOW_MUTATIONS=YES only for a disposable CI database.');
 const opts = { connectionString, connectionTimeoutMillis: 10000, statement_timeout: 15000, query_timeout: 20000 };
 const admin = new Client(opts), runtime = new Client(opts), contender = new Client(opts);
 const phase = name => console.log(`[db-safety] ${name}`);
 const ids = { tenantA:randomUUID(), tenantB:randomUUID(), outletA:randomUUID(), outletOtherA:randomUUID(), outletB:randomUUID(), tableA:randomUUID(), tableOtherA:randomUUID(), tableB:randomUUID(), staffA:randomUUID(), staffB:randomUUID(), staffSessionA:randomUUID(), diningSessionA:randomUUID(), diningSessionB:randomUUID() };
 const slug = randomUUID().replaceAll('-','').slice(0,16);
+let createdTestRole = false;
 async function assertDenied(client, sql, values, label) {
   await client.query('SAVEPOINT rls_guard');
   try { await client.query(sql,values); await client.query('ROLLBACK TO SAVEPOINT rls_guard'); throw new Error(`${label}: write unexpectedly succeeded`); }
@@ -20,7 +22,9 @@ try {
   phase('connect and verify non-owner runtime role');
   await admin.connect();
   await admin.query("SET lock_timeout='8s'; SET idle_in_transaction_session_timeout='30s'");
-  await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='gastro_runtime_test') THEN CREATE ROLE gastro_runtime_test NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$; ALTER ROLE gastro_runtime_test NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION; GRANT gastro_runtime_test TO CURRENT_USER; GRANT USAGE ON SCHEMA public TO gastro_runtime_test; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO gastro_runtime_test; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO gastro_runtime_test;`);
+  const testRoleExists = await admin.query("SELECT 1 FROM pg_roles WHERE rolname='gastro_runtime_test'");
+  createdTestRole = testRoleExists.rowCount === 0;
+  await admin.query(`DO $ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='gastro_runtime_test') THEN CREATE ROLE gastro_runtime_test NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $; ALTER ROLE gastro_runtime_test NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION; GRANT USAGE ON SCHEMA public TO gastro_runtime_test; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO gastro_runtime_test; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO gastro_runtime_test;`);
   const role = await admin.query("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname='gastro_runtime_test'");
   if (role.rows[0].rolsuper || role.rows[0].rolbypassrls) throw new Error('Runtime role can bypass RLS');
   const tableAudit = await admin.query("SELECT count(*)::int AS total,count(*) FILTER (WHERE relrowsecurity AND relforcerowsecurity)::int AS protected FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p')");
@@ -97,7 +101,6 @@ try {
   await runtime.query('ROLLBACK');
 
   phase('verify the provisioned gastro_runtime role with production grants');
-  await admin.query('GRANT gastro_runtime TO CURRENT_USER');
   await runtime.query('BEGIN'); await runtime.query('SET LOCAL ROLE gastro_runtime');
   const currentRole=await runtime.query('SELECT current_user,rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user');
   if(currentRole.rows[0].current_user!=='gastro_runtime'||currentRole.rows[0].rolsuper||currentRole.rows[0].rolbypassrls||currentRole.rows[0].rolinherit) throw new Error('Provisioned runtime role attributes are unsafe');
@@ -107,7 +110,12 @@ try {
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Auth lookup exposed production sessions');
   await runtime.query("SELECT set_config('app.session_token_hash',$1,true)",[ `token-${slug}` ]);
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==1) throw new Error('Production runtime token lookup failed');
-  await runtime.query("SELECT set_config('app.auth_lookup','false',true),set_config('app.session_token_hash','',true)");
+  await assertDenied(runtime,'UPDATE staff_sessions SET staff_id=$1 WHERE token_hash=$2',[ids.staffB,`token-${slug}`],'Runtime session identity mutation');
+  await runtime.query("SELECT set_config('app.auth_lookup','false',true)");
+  await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  await runtime.query('UPDATE staff_sessions SET revoked_at=now() WHERE token_hash=$1',[`token-${slug}`]);
+  if((await runtime.query('SELECT id FROM staff_sessions WHERE token_hash=$1',[`token-${slug}`])).rowCount!==0) throw new Error('Revoked session remained visible');
+  await runtime.query("SELECT set_config('app.session_token_hash','',true)");
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
   if((await runtime.query('SELECT id FROM staff_sessions')).rowCount!==0) throw new Error('Tenant/outlet context alone enumerated production sessions');
   if((await runtime.query('SELECT table_id FROM v_table_board')).rowCount!==1) throw new Error('Production runtime role cannot read the secured table-board view');
@@ -147,5 +155,11 @@ try {
   await admin.query('DELETE FROM dining_tables WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM outlets WHERE tenant_id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
   await admin.query('DELETE FROM tenants WHERE id=ANY($1::uuid[])',[[ids.tenantA,ids.tenantB]]).catch(()=>{});
+  if (createdTestRole) {
+    await admin.query('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gastro_runtime_test').catch(()=>{});
+    await admin.query('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM gastro_runtime_test').catch(()=>{});
+    await admin.query('REVOKE USAGE ON SCHEMA public FROM gastro_runtime_test').catch(()=>{});
+    await admin.query('DROP ROLE IF EXISTS gastro_runtime_test').catch(()=>{});
+  }
   await Promise.all([runtime.end().catch(()=>{}),contender.end().catch(()=>{}),admin.end().catch(()=>{})]);
 }
