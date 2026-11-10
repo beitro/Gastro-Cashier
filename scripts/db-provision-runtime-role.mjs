@@ -11,6 +11,7 @@ const literal = value => "'" + String(value).replaceAll("'","''") + "'";
 const client = new Client({ connectionString: adminUrl, connectionTimeoutMillis: 10000 });
 try {
   await client.connect();
+  await client.query('BEGIN');
   const exists = await client.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[roleName]);
   if (!exists.rowCount) await client.query(`CREATE ROLE ${ident(roleName)} LOGIN`);
   await client.query(`ALTER ROLE ${ident(roleName)} WITH LOGIN PASSWORD ${literal(password)} NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`);
@@ -25,9 +26,11 @@ try {
   const grants = [
     `GRANT CONNECT ON DATABASE ${ident(db)} TO ${ident(roleName)}`,
     `GRANT USAGE ON SCHEMA public TO ${ident(roleName)}`,
-    `GRANT SELECT ON tenants,outlets,staff_accounts,tenant_memberships,outlet_memberships,tenant_settings,outlet_settings,menu_categories,menu_items,dining_tables,dining_sessions,order_batches,order_items,payments,v_table_board,staff_sessions TO ${ident(roleName)}`,
+    `GRANT SELECT ON tenants,outlets,tenant_memberships,outlet_memberships,tenant_settings,outlet_settings,menu_categories,menu_items,dining_tables,dining_sessions,order_batches,order_items,payments,v_table_board,staff_sessions TO ${ident(roleName)}`,
+    `GRANT SELECT (id,display_name,status,pin_hash,nfc_credential_hash) ON staff_accounts TO ${ident(roleName)}`,
     `GRANT INSERT ON dining_sessions,order_batches,order_items,payments,payment_allocations,staff_sessions TO ${ident(roleName)}`,
-    `GRANT UPDATE ON dining_sessions,order_items,staff_sessions,auth_rate_limits TO ${ident(roleName)}`,
+    `GRANT UPDATE ON dining_sessions,order_items,auth_rate_limits TO ${ident(roleName)}`,
+    `GRANT UPDATE (revoked_at) ON staff_sessions TO ${ident(roleName)}`,
     `GRANT INSERT ON auth_rate_limits TO ${ident(roleName)}`,
     `GRANT SELECT ON auth_rate_limits TO ${ident(roleName)}`
   ];
@@ -36,5 +39,9 @@ try {
   const role=result.rows[0];
   const ownership=await client.query("SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S') AND c.relowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_objects, EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname='public' AND nspowner=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS owns_schema, EXISTS(SELECT 1 FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=$1)) AS has_memberships, has_schema_privilege($1,'public','CREATE') AS can_create_schema_objects, has_database_privilege($1,current_database(),'CREATE') AS can_create_schemas",[roleName]);
   if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolinherit || role.rolreplication || ownership.rows[0].owns_objects || ownership.rows[0].owns_schema || ownership.rows[0].has_memberships || ownership.rows[0].can_create_schema_objects || ownership.rows[0].can_create_schemas) throw new Error('Runtime role must be non-owner, NOSUPERUSER, NOBYPASSRLS, NOINHERIT and have no role memberships.');
+  await client.query('COMMIT');
   console.log(JSON.stringify({provisioned:true,role:role.rolname,superuser:role.rolsuper,bypassRls:role.rolbypassrls,inherit:role.rolinherit},null,2));
+} catch (error) {
+  await client.query('ROLLBACK').catch(()=>{});
+  throw error;
 } finally { await client.end().catch(()=>{}); }
