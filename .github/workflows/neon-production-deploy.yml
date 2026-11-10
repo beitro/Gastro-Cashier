@@ -220,7 +220,7 @@ jobs:
           u.username=process.env.NEON_RUNTIME_DB_ROLE;
           u.password=process.env.NEON_RUNTIME_DB_PASSWORD;
           const fs=await import('node:fs');
-          fs.appendFileSync(process.env.GITHUB_ENV,'DATABASE_URL='+u.toString()+'\\n',{mode:0o600});
+          fs.appendFileSync(process.env.GITHUB_ENV,'DATABASE_URL='+u.toString()+'\n',{mode:0o600});
           NODE
       - name: Verify RLS through the actual gastro_runtime login (read-only)
         env:
