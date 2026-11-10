@@ -23,6 +23,7 @@ import {
 } from './utils/posCalculations';
 import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
+import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock } from './services/posApi';
 
 import { Navbar, NavTabId } from './components/Navbar';
 import { FloorPlanGrid } from './components/FloorPlanGrid';
@@ -515,6 +516,28 @@ export default function App() {
     return null;
   });
 
+  const [apiMenu, setApiMenu] = useState<Record<string, any>[]>([]);
+
+  useEffect(() => {
+    if (!currentStaff) return;
+    if (!getApiToken()) { setCurrentStaff(null); return; }
+    let cancelled = false;
+    loadPosSnapshot().then(snapshot => {
+      if (cancelled) return;
+      setTables(snapshot.tables);
+      setActiveTransactions(snapshot.transactions);
+      setApiMenu(snapshot.menu);
+      const stock = mapApiMenuToStock(snapshot.menu, MENU_ITEMS);
+      menuStockRef.current = stock;
+      setMenuStock(stock);
+      setPaymentFlowMode('payment_last');
+    }).catch(error => {
+      if (!cancelled) window.alert('Gagal memuat data POS dari server: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    });
+    return () => { cancelled = true; };
+  }, [currentStaff?.id]);
+
+
   const [isLocked, setIsLocked] = useState<boolean>(false);
 
   const [pettyCashEntries, setPettyCashEntries] = useState<PettyCashEntry[]>(() => {
@@ -661,234 +684,43 @@ export default function App() {
   };
 
   // FLOW 1 (EXISTING): PAYMENT LAST (BAYAR BELAKANG) — OPEN TABLE & SEND TO KITCHEN/BAR
-  const handleSubmitOrder = (params: {
+  const handleSubmitOrder = async (params: {
     table: Table; guestCount: number; waiterName: string; newItems: OrderItem[]; batchNumber: number;
   }) => {
     const { table, guestCount, waiterName } = params;
-    if (!currentStaff || !canOperatePOS(currentStaff)) { window.alert('Role Anda tidak diizinkan mengoperasikan POS.'); return; }
-    if (!reserveMenuStock(params.newItems)) return;
-    const now = new Date().toISOString();
-    const baseTx = table.currentTransactionId ? activeTransactions[table.currentTransactionId] : undefined;
-    let transaction: Transaction;
-    let stampedNewItems: OrderItem[];
-    let batchNumber: number;
-
-    if (baseTx) {
-      const appended = appendBatch(baseTx, params.newItems.map(i => ({ ...i, isPaid: false })), currentStaff);
-      transaction = appended;
-      batchNumber = appended.nextBatchNumber! - 1;
-      stampedNewItems = appended.batches[appended.batches.length - 1].items;
-      const totals = calculateOrderTotals(appended.allCurrentItems, appended.discountAmount);
-      transaction = { ...appended, paymentFlow: 'payment_last', isPaid: false, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount };
-    } else {
-      const created = createSession(table, currentStaff, guestCount, activeTransactions);
-      if (!created.ok) { window.alert(created.message); return; }
-      const appended = appendBatch(created.transaction, params.newItems.map(i => ({ ...i, isPaid: false })), currentStaff);
-      transaction = { ...appended, waiterName, outletId: table.outletId || currentStaff.outletId };
-      batchNumber = appended.nextBatchNumber! - 1;
-      stampedNewItems = appended.batches[appended.batches.length - 1].items;
-      const totals = calculateOrderTotals(appended.allCurrentItems);
-      transaction = { ...transaction, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount };
+    if (!currentStaff || !canOperatePOS(currentStaff) || !getApiToken()) { window.alert('Sesi API POS tidak aktif. Silakan login ulang.'); return; }
+    if (!apiMenu.length) { window.alert('Katalog API belum dimuat. Pesanan tidak dikirim.'); return; }
+    try {
+      let sessionId = table.currentTransactionId;
+      if (!sessionId) {
+        const created = await openApiSession(table, guestCount, currentStaff.id);
+        sessionId = created.id;
+      }
+      await submitApiOrder(sessionId, params.newItems, apiMenu);
+      const snapshot = await loadPosSnapshot();
+      const transaction = snapshot.transactions[sessionId];
+      if (!transaction) throw new Error('Sesi tersimpan tetapi tidak ditemukan saat refresh.');
+      const stampedItems = transaction.batches[transaction.batches.length - 1]?.items || [];
+      const newTickets = generatePrintTickets({ transaction, batchItems: stampedItems, batchNumber: stampedItems[0]?.batchNumber || params.batchNumber, type: 'order' });
+      setTables(snapshot.tables);
+      setActiveTransactions(snapshot.transactions);
+      setApiMenu(snapshot.menu);
+      setAllPrintTickets(prev => [...newTickets, ...prev]);
+      setOrderModalTable(null);
+      setPrinterModalTickets(newTickets);
+      setShowPrinterModal(true);
+      if (soundEnabled) { sounds.playPrinterSound(); setTimeout(() => sounds.playBellSound(), 350); }
+    } catch (error) {
+      window.alert('Pesanan gagal disimpan ke database. Tidak ada transaksi lokal pengganti yang dibuat. ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
-
-    const newTickets = generatePrintTickets({ transaction, batchItems: stampedNewItems, batchNumber, type: 'order' });
-    setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: 'occupied', currentTransactionId: transaction.id, guestCount, waiterName, openedAt: t.openedAt || now, outletId: transaction.outletId, sessionVersion: transaction.sessionVersion } : t));
-    setActiveTransactions(prev => ({ ...prev, [transaction.id]: transaction }));
-    setAllPrintTickets(prev => [...newTickets, ...prev]);
-    setRawMaterials(prev => deductRecipeMaterials(stampedNewItems, prev, MENU_ITEMS).updatedMaterials);
-    setOrderModalTable(null);
-    setPrinterModalTickets(newTickets);
-    setShowPrinterModal(true);
-    if (soundEnabled) { sounds.playPrinterSound(); setTimeout(() => sounds.playBellSound(), 350); }
   };
 
   // FLOW 2 (NEW): PAYMENT FIRST (LANGSUNG BAYAR DI DEPAN) — SETTLE IMMEDIATELY + PRINT RECEIPT & KITCHEN/BAR/CHECKER
-  const handleSubmitPaymentFirstOrder = (params: {
-    table: Table;
-    guestCount: number;
-    waiterName: string;
-    newItems: OrderItem[];
-    batchNumber: number;
-    paymentMethod: 'cash' | 'qris' | 'card';
-    cashGiven: number;
-    changeAmount: number;
-    discountAmount: number;
-    keepTableAvailable?: boolean;
+  const handleSubmitPaymentFirstOrder = (_params: {
+    table: Table; guestCount: number; waiterName: string; newItems: OrderItem[]; batchNumber: number;
+    paymentMethod: 'cash' | 'qris' | 'card'; cashGiven: number; changeAmount: number; discountAmount: number; keepTableAvailable?: boolean;
   }) => {
-    const {
-      table,
-      guestCount,
-      waiterName,
-      batchNumber,
-      paymentMethod,
-      cashGiven,
-      changeAmount,
-      discountAmount,
-      keepTableAvailable = false,
-    } = params;
-    const now = new Date().toISOString();
-    if (!currentStaff || !canOperatePOS(currentStaff)) { window.alert('Role Anda tidak diizinkan mengoperasikan POS.'); return; }
-    if (!reserveMenuStock(params.newItems)) return;
-    const paidNewItems = params.newItems.map((item) => ({ ...item, isPaid: true, createdByStaffId: currentStaff.id, createdByStaffName: currentStaff.name, createdAt: now }));
-
-    const existingTxId = table.currentTransactionId;
-    const existingTx = existingTxId ? activeTransactions[existingTxId] : null;
-    const unpaidExistingItems = existingTx
-      ? existingTx.allCurrentItems.filter((i) => !i.isPaid).map((i) => ({ ...i, isPaid: true }))
-      : [];
-
-    // Items settled in this upfront payment
-    const itemsPaidNow = [...unpaidExistingItems, ...paidNewItems];
-    const settledTotals = calculateOrderTotals(itemsPaidNow, discountAmount);
-    const settledTxId = `TRX-PF-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    const settledRecord: Transaction = {
-      id: settledTxId,
-      tableId: table.id,
-      tableNumber: table.tableNumber,
-      area: table.area,
-      guestCount,
-      waiterName,
-      openedAt: existingTx?.openedAt || now,
-      status: 'settled',
-      paymentFlow: 'payment_first',
-      isPaid: true,
-      batches: [
-        {
-          batchNumber,
-          timestamp: now,
-          items: itemsPaidNow,
-        },
-      ],
-      allCurrentItems: itemsPaidNow,
-      subtotal: settledTotals.subtotal,
-      serviceChargeRate: 0.05,
-      serviceChargeAmount: settledTotals.serviceChargeAmount,
-      taxRate: 0.1,
-      taxAmount: settledTotals.taxAmount,
-      discountAmount,
-      totalAmount: settledTotals.totalAmount,
-      paidAt: now,
-      paymentMethod,
-      cashGiven,
-      changeAmount,
-      cashierName: currentStaff.name,
-      outletId: table.outletId || currentStaff.outletId,
-      openedByStaffId: existingTx?.openedByStaffId || currentStaff.id,
-      openedByStaffName: existingTx?.openedByStaffName || currentStaff.name,
-      sessionVersion: (existingTx?.sessionVersion || 0) + 1,
-    };
-
-    // 1. Record Omzet & PB1 immediately
-    setSettledTransactions((prev) => [settledRecord, ...prev]);
-
-    // 2. Deduct BOM Raw Materials immediately
-    setRawMaterials((prevMaterials) => deductRecipeMaterials(paidNewItems, prevMaterials, MENU_ITEMS).updatedMaterials);
-
-    // 3. Generate Official Payment Receipt + Kitchen + Bar + Checker tickets together
-    const paymentFirstTickets = generatePrintTickets({
-      transaction: settledRecord,
-      batchItems: paidNewItems,
-      batchNumber,
-      type: 'payment_first',
-    });
-
-    setAllPrintTickets((prev) => [...paymentFirstTickets, ...prev]);
-
-    // 4. Update Table & KDS/Checker Serving State
-    if (keepTableAvailable && !existingTx) {
-      // Takeaway / Fast Counter: keep table available (Hijau Kosong)
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === table.id
-            ? {
-                ...t,
-                status: 'available',
-                currentTransactionId: undefined,
-                guestCount: undefined,
-                openedAt: undefined,
-                waiterName: undefined,
-              }
-            : t
-        )
-      );
-    } else {
-      // Dine-In Payment First: mark table OCCUPIED • LUNAS so KDS & Waiter Checker track serving
-      const activeTxId = existingTx ? existingTx.id : settledTxId;
-      const mergedAllItems = existingTx
-        ? [
-            ...existingTx.allCurrentItems.map((i) => ({ ...i, isPaid: true })),
-            ...paidNewItems,
-          ]
-        : paidNewItems;
-      const mergedTotals = calculateOrderTotals(mergedAllItems, discountAmount);
-      const updatedBatches: OrderBatch[] = existingTx
-        ? [
-            ...existingTx.batches.map((b) => ({
-              ...b,
-              items: b.items.map((i) => ({ ...i, isPaid: true })),
-            })),
-            { batchNumber, timestamp: now, items: paidNewItems },
-          ]
-        : [{ batchNumber: 1, timestamp: now, items: paidNewItems }];
-
-      const activeServingTx: Transaction = {
-        id: activeTxId,
-        tableId: table.id,
-        tableNumber: table.tableNumber,
-        area: table.area,
-        guestCount,
-        waiterName,
-        openedAt: existingTx?.openedAt || now,
-        status: 'active',
-        paymentFlow: 'payment_first',
-        isPaid: true,
-        batches: updatedBatches,
-        allCurrentItems: mergedAllItems,
-        subtotal: mergedTotals.subtotal,
-        serviceChargeRate: 0.05,
-        serviceChargeAmount: mergedTotals.serviceChargeAmount,
-        taxRate: 0.1,
-        taxAmount: mergedTotals.taxAmount,
-        discountAmount,
-        totalAmount: mergedTotals.totalAmount,
-        paidAt: now,
-        paymentMethod,
-        cashGiven,
-        changeAmount,
-        cashierName: currentStaff.name,
-      };
-
-      setActiveTransactions((prev) => ({
-        ...prev,
-        [activeTxId]: activeServingTx,
-      }));
-
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === table.id
-            ? {
-                ...t,
-                status: 'occupied',
-                currentTransactionId: activeTxId,
-                guestCount,
-                waiterName,
-                openedAt: t.openedAt || now,
-              }
-            : t
-        )
-      );
-    }
-
-    // 5. Close OrderModal and open Auto-Routing Printer Hub with Payment Receipt + Station Slips
-    setOrderModalTable(null);
-    setPrinterModalTickets(paymentFirstTickets);
-    setShowPrinterModal(true);
-
-    if (soundEnabled) {
-      sounds.playPrinterSound();
-      setTimeout(() => sounds.playBellSound(), 350);
-    }
+    window.alert('Payment First sementara dinonaktifkan sampai backend mendukung pembayaran parsial dan sesi layanan setelah pelunasan. Gunakan Payment Last agar pembayaran tercatat atomik di database.');
   };
 
   // KDS Dapur & Barista Cooking Status Management
@@ -1107,7 +939,7 @@ export default function App() {
   };
 
   // STEP 7: SETTLEMENT & CLOSE TABLE
-  const handleCompleteSettlement = (params: {
+  const handleCompleteSettlement = async (params: {
     transactionId: string;
     tableId: string;
     paymentMethod: 'cash' | 'qris' | 'card';
@@ -1115,76 +947,29 @@ export default function App() {
     changeAmount?: number;
     discountAmount: number;
   }) => {
-    const { transactionId, tableId, paymentMethod, cashGiven, changeAmount, discountAmount } = params;
+    const { transactionId, tableId, paymentMethod, cashGiven, discountAmount } = params;
     const currentTx = activeTransactions[transactionId];
-    if (!currentTx || !canOperatePOS(currentStaff)) return;
-
-    const now = new Date().toISOString();
-    const unpaidItems = currentTx.allCurrentItems.filter((i) => !i.isPaid);
-    const itemsToSettle = unpaidItems.length > 0 ? unpaidItems : currentTx.allCurrentItems;
-    const totals = calculateOrderTotals(itemsToSettle, discountAmount);
-
-    const completedTx: Transaction = {
-      ...currentTx,
-      status: 'settled',
-      paymentFlow: 'payment_last',
-      isPaid: true,
-      allCurrentItems: itemsToSettle.map((i) => ({ ...i, isPaid: true })),
-      paidAt: now,
-      paymentMethod,
-      cashGiven,
-      changeAmount,
-      cashierName: currentStaff?.name || 'Staff',
-      discountAmount,
-      subtotal: totals.subtotal,
-      serviceChargeAmount: totals.serviceChargeAmount,
-      taxAmount: totals.taxAmount,
-      totalAmount: totals.totalAmount,
-    };
-
-    // Generate Struk Pembayaran Sah Customer Receipt
-    const receiptTicket = generatePrintTickets({
-      transaction: completedTx,
-      batchItems: completedTx.allCurrentItems,
-      batchNumber: completedTx.batches.length,
-      type: 'settlement',
-    });
-
-    // Move to settled
-    setSettledTransactions((prev) => [completedTx, ...prev]);
-
-    // Remove from active
-    setActiveTransactions((prev) => {
-      const copy = { ...prev };
-      delete copy[transactionId];
-      return copy;
-    });
-
-    // Step 7: Turn table color back to GREEN (kosong / siap pakai)
-    setTables((prev) =>
-      prev.map((t) =>
-        t.id === tableId
-          ? {
-              ...t,
-              status: 'available',
-              currentTransactionId: undefined,
-              guestCount: undefined,
-              openedAt: undefined,
-              waiterName: undefined,
-            }
-          : t
-      )
-    );
-
-    setAllPrintTickets((prev) => [...receiptTicket, ...prev]);
-
-    // Close payment modal and show Customer Receipt immediately
-    setPaymentModalTable(null);
-    setPrinterModalTickets(receiptTicket);
-    setShowPrinterModal(true);
-
-    if (soundEnabled) {
-      sounds.playPrinterSound();
+    if (!currentTx || !canOperatePOS(currentStaff) || !getApiToken()) return;
+    try {
+      const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven);
+      const completedTx = mapPaymentToTransaction(currentTx, payment);
+      const receiptTicket = generatePrintTickets({
+        transaction: completedTx,
+        batchItems: completedTx.allCurrentItems,
+        batchNumber: completedTx.batches.length,
+        type: 'settlement',
+      });
+      const snapshot = await loadPosSnapshot();
+      setTables(snapshot.tables);
+      setActiveTransactions(snapshot.transactions);
+      setSettledTransactions(prev => [completedTx, ...prev]);
+      setAllPrintTickets(prev => [...receiptTicket, ...prev]);
+      setPaymentModalTable(null);
+      setPrinterModalTickets(receiptTicket);
+      setShowPrinterModal(true);
+      if (soundEnabled) sounds.playPrinterSound();
+    } catch (error) {
+      window.alert('Pembayaran belum dikonfirmasi oleh database. Jangan ulangi dengan nominal berbeda. ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -1330,17 +1115,24 @@ export default function App() {
               const access = assertTableAccess(currentStaff, table, activeTransactions);
               if (!access.ok) window.alert(access.message);
             }}
-            onOpenOrder={(table) => {
+            onOpenOrder={async (table) => {
               const access = assertTableAccess(currentStaff, table, activeTransactions);
               if (!access.ok || !currentStaff) { if (!access.ok) window.alert(access.message); return; }
-              const created = createSession(table, currentStaff, table.guestCount || Math.min(table.capacity, 2), activeTransactions);
-              if (!created.ok) { window.alert(created.message); return; }
-              if (created.created) {
-                setActiveTransactions(prev => ({ ...prev, [created.transaction.id]: created.transaction }));
-                const opened = { ...table, status: 'occupied' as const, currentTransactionId: created.transaction.id, guestCount: created.transaction.guestCount, openedAt: created.transaction.openedAt, waiterName: currentStaff.name, outletId: created.transaction.outletId, sessionVersion: 1 };
-                setTables(prev => prev.map(t => t.id === table.id ? opened : t));
+              try {
+                let sessionId = table.currentTransactionId;
+                if (!sessionId) {
+                  const created = await openApiSession(table, table.guestCount || Math.min(table.capacity, 2), currentStaff.id);
+                  sessionId = created.id;
+                }
+                const snapshot = await loadPosSnapshot();
+                const opened = snapshot.tables.find(t => t.id === table.id);
+                if (!opened || !snapshot.transactions[sessionId]) throw new Error('Sesi meja tidak ditemukan setelah dibuat.');
+                setTables(snapshot.tables);
+                setActiveTransactions(snapshot.transactions);
                 setOrderModalTable(opened);
-              } else { setOrderModalTable({ ...table, status: 'occupied', currentTransactionId: created.transaction.id }); }
+              } catch (error) {
+                window.alert('Gagal membuka meja melalui API: ' + (error instanceof Error ? error.message : 'Unknown error'));
+              }
             }}
             onOpenPayment={(table) => {
               sounds.playTapSound();
