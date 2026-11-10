@@ -117,6 +117,8 @@ try {
   await assertDenied(runtime,'UPDATE staff_sessions SET staff_id=$1 WHERE token_hash=$2',[ids.staffB,`token-${slug}`],'Runtime session identity mutation');
   await runtime.query("SELECT set_config('app.auth_lookup','false',true)");
   await runtime.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.outlet_id',$2,true)",[ids.tenantA,ids.outletA]);
+  const revokeDebug = await runtime.query("SELECT current_user,current_setting('app.session_token_hash',true) AS token_context,current_setting('app.tenant_id',true) AS tenant_context,current_setting('app.outlet_id',true) AS outlet_context,(SELECT json_agg(json_build_object('id',id,'tenant_id',tenant_id,'outlet_id',outlet_id,'revoked_at',revoked_at,'expires_at',expires_at)) FROM staff_sessions WHERE token_hash=$1) AS matching_sessions,(SELECT json_agg(json_build_object('policy',policyname,'command',cmd,'using',qual,'check',with_check,'permissive',permissive)) FROM pg_policies WHERE schemaname='public' AND tablename='staff_sessions') AS policies",[`token-${slug}`]);
+  phase('session revoke diagnostics '+JSON.stringify(revokeDebug.rows[0]));
   await runtime.query('UPDATE staff_sessions SET revoked_at=now() WHERE token_hash=$1',[`token-${slug}`]);
   if((await runtime.query('SELECT id FROM staff_sessions WHERE token_hash=$1',[`token-${slug}`])).rowCount!==0) throw new Error('Revoked session remained visible');
   await runtime.query("SELECT set_config('app.session_token_hash','',true)");
