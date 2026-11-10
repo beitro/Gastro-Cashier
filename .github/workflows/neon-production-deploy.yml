@@ -227,6 +227,13 @@ jobs:
           set -euo pipefail
           docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
             postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_rls_runtime_hardening.sql'
+      - name: Apply owner-scoped staff administration migration 003
+        env:
+          DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD:/work" -w /work -e DATABASE_URL \
+            postgres:18-alpine sh -ec 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/003_staff_admin_management.sql'
       - name: Provision least-privilege gastro_runtime role
         env:
           ADMIN_DATABASE_URL: ${{ secrets.NEON_ADMIN_DATABASE_URL }}
