@@ -222,7 +222,7 @@ app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>
 app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null;
   const role=req.body?.role,pin=String(req.body?.pin||'');
-  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\\d{4,8}$/.test(pin)|| (email && (email.length>254||!/^\\S+@\\S+\\.\\S+$/.test(email)))) return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
+  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)|| (email && (email.length>254||!/^\S+@\S+\\.\S+$/.test(email)))) return res.status(400).json({error:'Nama, role, email, atau PIN tidak valid.'});
   const pinHash=await hashCredential(pin);
   const created=await adminScoped(req,async c=>{
     const a=(await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash) VALUES($1,$2,$3) RETURNING id',[email,name,pinHash])).rows[0];
@@ -258,7 +258,7 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
 app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const pin=req.body?.pin===undefined?null:String(req.body.pin),uid=req.body?.nfcUid===undefined?null:String(req.body.nfcUid).trim().toUpperCase();
   if(pin===null&&uid===null)return res.status(400).json({error:'PIN baru atau NFC UID wajib diisi.'});
-  if(pin!==null&&!/^\\d{4,8}$/.test(pin))return res.status(400).json({error:'PIN harus 4–8 digit.'});
+  if(pin!==null&&!/^\d{4,8}$/.test(pin))return res.status(400).json({error:'PIN harus 4–8 digit.'});
   if(uid!==null&&(!uid||uid.length>200))return res.status(400).json({error:'NFC UID tidak valid.'});
   const pinHash=pin===null?null:await hashCredential(pin),nfcHash=uid===null?null:await hashCredential(uid);
   const result=await adminScoped(req,async c=>{
