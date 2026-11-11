@@ -35,7 +35,26 @@ app.use(express.json({ limit: '256kb' }));
 const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
 if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 10.');
 if (trustProxyHops > 0) app.set('trust proxy', trustProxyHops);
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined, max: Number(process.env.PGPOOL_MAX || 10), connectionTimeoutMillis: 5000 });
+function resolveRuntimeConnectionString() {
+  const url = process.env.DATABASE_URL || '';
+  if (!url) return url;
+  // If the integration provisioned neondb_owner, switch user to the safe unprivileged runtime role gastro_runtime
+  try {
+    const parsed = new URL(url);
+    if (parsed.username === 'neondb_owner') {
+      parsed.username = 'gastro_runtime';
+      return parsed.toString();
+    }
+  } catch {}
+  return url;
+}
+
+const pool = new Pool({
+  connectionString: resolveRuntimeConnectionString(),
+  ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  max: Number(process.env.PGPOOL_MAX || 10),
+  connectionTimeoutMillis: 5000,
+});
 const bootstrapPool = process.env.BOOTSTRAP_DATABASE_URL ? new Pool({ connectionString: process.env.BOOTSTRAP_DATABASE_URL, ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined, max: 2, connectionTimeoutMillis: 5000 }) : null;
 const scrypt = promisify(scryptCallback);
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
