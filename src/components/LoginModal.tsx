@@ -162,29 +162,38 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           throw new Error(data.error || 'Akun karyawan sedang diblokir atau akses ditolak.');
         }
         if (response.status === 401 && data?.error) {
-          // Check if local demo account matches when testing in demo/hybrid mode
-          const localAuth = authenticateByPin(cleanPin, staffList);
-          if (localAuth.success && localAuth.staff) {
-            localStorage.removeItem('gastro_cashier_api_token');
-            sounds.playBellSound();
-            setFailedAttempts(0);
-            setLockUntil(null);
-            setNfcSuccessAnimation('Selamat datang, ' + localAuth.staff.name + '!');
-            setTimeout(() => onLoginSuccess(localAuth.staff!), 400);
-            return;
-          }
-          if (localAuth.error && localAuth.error.includes('diblokir')) {
-            apiHandled = true;
-            throw new Error(localAuth.error);
+          // Local demo credentials are permitted only in Vite development mode.
+          if (import.meta.env.DEV) {
+            const localAuth = authenticateByPin(cleanPin, staffList);
+            if (localAuth.success && localAuth.staff) {
+              localStorage.removeItem('gastro_cashier_api_token');
+              sounds.playBellSound();
+              setFailedAttempts(0);
+              setLockUntil(null);
+              setNfcSuccessAnimation('Demo: ' + localAuth.staff.name);
+              setTimeout(() => onLoginSuccess(localAuth.staff!), 400);
+              return;
+            }
+            if (localAuth.error && localAuth.error.includes('diblokir')) {
+              apiHandled = true;
+              throw new Error(localAuth.error);
+            }
           }
           apiHandled = true;
-          throw new Error(data.error);
+          throw new Error(data.error || 'PIN tidak terdaftar di server.');
+        }
+        if (!import.meta.env.DEV) {
+          apiHandled = true;
+          throw new Error(data?.error || 'Autentikasi server gagal. Login lokal dinonaktifkan.');
         }
       } catch (apiErr) {
-        if (apiHandled) throw apiErr;
+        if (apiHandled || !import.meta.env.DEV) throw apiErr;
       }
 
-      // Local fallback mode when API server is offline or running in demo mode
+      // Local fallback is intentionally restricted to local development.
+      if (!import.meta.env.DEV) {
+        throw new Error('Server autentikasi tidak tersedia. Periksa koneksi atau hubungi administrator.');
+      }
       const localResult = authenticateByPin(cleanPin, staffList);
       if (!localResult.success || !localResult.staff) {
         throw new Error(localResult.error || 'PIN tidak valid atau akun tidak aktif.');
@@ -232,27 +241,36 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           throw new Error(data.error || 'Akun karyawan ini sedang diblokir.');
         }
         if (response.status === 401 && data?.error) {
-          const localNfc = authenticateByNfc(tagUid, staffList);
-          if (localNfc.success && localNfc.staff) {
-            localStorage.removeItem('gastro_cashier_api_token');
-            sounds.playBellSound();
-            setFailedAttempts(0);
-            setLockUntil(null);
-            setNfcSuccessAnimation('NFC terverifikasi: ' + localNfc.staff.name);
-            setTimeout(() => onLoginSuccess(localNfc.staff!), 500);
-            return;
-          }
-          if (localNfc.error && localNfc.error.includes('diblokir')) {
-            apiHandled = true;
-            throw new Error(localNfc.error);
+          if (import.meta.env.DEV) {
+            const localNfc = authenticateByNfc(tagUid, staffList);
+            if (localNfc.success && localNfc.staff) {
+              localStorage.removeItem('gastro_cashier_api_token');
+              sounds.playBellSound();
+              setFailedAttempts(0);
+              setLockUntil(null);
+              setNfcSuccessAnimation('Demo NFC: ' + localNfc.staff.name);
+              setTimeout(() => onLoginSuccess(localNfc.staff!), 500);
+              return;
+            }
+            if (localNfc.error && localNfc.error.includes('diblokir')) {
+              apiHandled = true;
+              throw new Error(localNfc.error);
+            }
           }
           apiHandled = true;
-          throw new Error(data.error);
+          throw new Error(data.error || 'Kartu NFC tidak terdaftar di server.');
+        }
+        if (!import.meta.env.DEV) {
+          apiHandled = true;
+          throw new Error(data?.error || 'Autentikasi NFC server gagal. Login lokal dinonaktifkan.');
         }
       } catch (apiErr) {
-        if (apiHandled) throw apiErr;
+        if (apiHandled || !import.meta.env.DEV) throw apiErr;
       }
 
+      if (!import.meta.env.DEV) {
+        throw new Error('Server autentikasi tidak tersedia. Periksa koneksi atau hubungi administrator.');
+      }
       const localResult = authenticateByNfc(tagUid, staffList);
       if (!localResult.success || !localResult.staff) {
         throw new Error(localResult.error || 'Kartu NFC tidak dikenali.');
