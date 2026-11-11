@@ -861,8 +861,8 @@ app.get('*', (req, res, next) => {
 });
 
 app.use((err, _req, res, _next) => {
-  console.error('[api]', err.message);
-  res.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Terjadi kesalahan server.' : err.message });
+  console.error('[api]', err.message, err.stack);
+  res.status(500).json({ error: err.message || 'Terjadi kesalahan server.', detail: err.detail || null });
 });
 async function assertSafeRuntimeRole() {
   const result = await pool.query(`
