@@ -235,6 +235,21 @@ CREATE TABLE idempotency_keys (
 );
 CREATE INDEX idx_idempotency_expiry ON idempotency_keys(expires_at);
 
+
+-- Persistent, revocable API sessions. Token hashes only; raw bearer tokens are never stored.
+CREATE TABLE staff_sessions (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ staff_id UUID NOT NULL REFERENCES staff_accounts(id) ON DELETE CASCADE,
+ tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+ outlet_id UUID NOT NULL,
+ token_hash TEXT NOT NULL UNIQUE,
+ expires_at TIMESTAMPTZ NOT NULL,
+ revoked_at TIMESTAMPTZ,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ FOREIGN KEY(tenant_id,outlet_id) REFERENCES outlets(tenant_id,id) ON DELETE CASCADE
+);
+CREATE INDEX idx_staff_sessions_active ON staff_sessions(token_hash,expires_at) WHERE revoked_at IS NULL;
+
 CREATE FUNCTION reject_audit_log_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'audit_logs is append-only'; END;
 $$;
