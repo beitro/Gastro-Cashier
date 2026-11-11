@@ -711,9 +711,43 @@ app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyn
     if(!Number.isFinite(received)||received<total) return {status:400,body:{error:'Uang diterima tidak cukup.'}};
     const receipt='R-'+new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,14)+'-'+randomBytes(3).toString('hex').toUpperCase();
     const status=method==='cash'?'settled':'pending';
-    const payment=(await c.query(`INSERT INTO payments(tenant_id,outlet_id,session_id,receipt_number,status,method,card_bank,subtotal_amount,discount_amount,service_charge_amount,tax_amount,total_amount,cash_received,change_amount,cashier_staff_id,idempotency_key,paid_at,settled_at,settled_by_staff_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,CASE WHEN $5='settled' THEN now() ELSE NULL END,CASE WHEN $5='settled' THEN now() ELSE NULL END,CASE WHEN $5='settled' THEN $15 ELSE NULL END) RETURNING *`,
-      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,receipt,status,method,cardBank||null,subtotal,discount,service,tax,total,received,method==='cash'?received-total:0,req.auth.staff_id,idempotencyKey])).rows[0];
+    const paidAt = status === 'settled' ? new Date() : null;
+    const settledAt = status === 'settled' ? new Date() : null;
+    const settledByStaffId = status === 'settled' ? req.auth.staff_id : null;
+    const payment = (
+      await c.query(
+        `INSERT INTO payments(
+          tenant_id, outlet_id, session_id, receipt_number, status, method, card_bank,
+          subtotal_amount, discount_amount, service_charge_amount, tax_amount, total_amount,
+          cash_received, change_amount, cashier_staff_id, idempotency_key, paid_at, settled_at, settled_by_staff_id
+        ) VALUES (
+          $1, $2, $3, $4, $5::text, $6, $7,
+          $8, $9, $10, $11, $12,
+          $13, $14, $15, $16, $17, $18, $19
+        ) RETURNING *`,
+        [
+          req.auth.tenant_id,
+          req.auth.outlet_id,
+          req.params.sessionId,
+          receipt,
+          status,
+          method,
+          cardBank || null,
+          subtotal,
+          discount,
+          service,
+          tax,
+          total,
+          received,
+          method === 'cash' ? received - total : 0,
+          req.auth.staff_id,
+          idempotencyKey,
+          paidAt,
+          settledAt,
+          settledByStaffId,
+        ]
+      )
+    ).rows[0];
     if(status==='settled') {
       for(const item of items.rows) if(Number(item.line_total)>0) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5)',[req.auth.tenant_id,req.auth.outlet_id,payment.id,item.id,Number(item.line_total)]);
       await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
