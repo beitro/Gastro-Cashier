@@ -13,6 +13,7 @@
     "start:dev": "node --watch server/index.mjs",
     "db:check": "node scripts/db-check.mjs",
     "db:migrate": "node scripts/db-migrate.mjs",
+    "db:migrate:all": "node scripts/db-migrate-all.mjs",
     "db:provision-runtime-role": "node scripts/db-provision-runtime-role.mjs",
     "db:provision-rls-context-key": "node scripts/db-provision-rls-context-key.mjs",
     "test:e2e:pos": "node scripts/e2e-pos-transaction.mjs",

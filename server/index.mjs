@@ -10,6 +10,27 @@ dotenv.config();
 const { Pool } = pg;
 const app = express();
 app.disable('x-powered-by');
+const allowedOrigins = new Set(
+  String(process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && allowedOrigins.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Accept,Authorization,Content-Type,x-bootstrap-token');
+    res.set('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') {
+    if (origin && !allowedOrigins.has(origin)) return res.status(403).end();
+    return res.status(204).end();
+  }
+  next();
+});
 app.use(express.json({ limit: '256kb' }));
 const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
 if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 10.');
@@ -40,11 +61,17 @@ async function setRlsContext(client, claims) {
   );
   await client.query("SELECT set_config('app.context_token',$1,true)", [signRlsContext({ ...claims, txid: tx.rows[0].txid })]);
 }
-const normalizeRole = (role) => ['owner','manager','finance','cashier'].includes(role) ? role : null;
+const normalizeRole = (role) => ['owner','manager','finance','cashier','waiter','kitchen'].includes(role) ? role : null;
 function requireOwner(req,res,next) { if (!req.auth || req.auth.role_code !== 'owner') return res.status(403).json({error:'Hanya Owner yang dapat mengelola staff.'}); next(); }
 function requirePosRole(req, res, next) {
-  if (!req.auth || !['owner','manager','cashier'].includes(normalizeRole(req.auth.role_code))) {
+  if (!req.auth || !['owner','manager','cashier','waiter'].includes(normalizeRole(req.auth.role_code))) {
     return res.status(403).json({ error:'Role Anda tidak memiliki izin untuk operasi POS.' });
+  }
+  next();
+}
+function requireKdsOrPosRole(req, res, next) {
+  if (!req.auth || !['owner','manager','cashier','waiter','kitchen'].includes(normalizeRole(req.auth.role_code))) {
+    return res.status(403).json({ error:'Role Anda tidak memiliki izin untuk operasi KDS/POS.' });
   }
   next();
 }
@@ -75,7 +102,13 @@ async function transaction(fn, dbPool = pool) {
   catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }
-function asyncRoute(fn) { return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next); }
+function asyncRoute(fn) {
+  return (req, res, next) =>
+    Promise.resolve()
+      .then(() => (process.env.VERCEL ? ensureSafeRuntimeRole() : undefined))
+      .then(() => fn(req, res, next))
+      .catch(next);
+}
 const AUTH_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_MAX_ATTEMPTS = 5;
 const AUTH_BLOCK_MS = 30 * 1000;
@@ -147,6 +180,7 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
 
 async function authenticate(req, res, next) {
   try {
+    if (process.env.VERCEL) await ensureSafeRuntimeRole();
     const token = (req.get('authorization') || '').replace(/^Bearer\s+/i,'');
     if (!token) return res.status(401).json({ error:'Sesi login diperlukan.' });
     const tokenHash = sha256(token);
@@ -255,7 +289,7 @@ app.use('/api/admin/staff', (req,res,next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   return res.status(423).json({ error:'Administrasi staff sementara read-only selama emergency release POS.', code:'STAFF_ADMIN_READ_ONLY' });
 });
-const ADMIN_ROLES=['owner','manager','cashier','finance'];
+const ADMIN_ROLES=['owner','manager','cashier','waiter','kitchen','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
@@ -323,7 +357,7 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
   if(!result)return res.status(404).json({error:'Staff tidak ditemukan di outlet ini.'});
   res.json({ok:true,credentialsUpdated:true,sessionsRevoked:true});
 }));
-app.get('/api/menu', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+app.get('/api/menu', authenticate, requireKdsOrPosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT m.id,m.sku,m.name,m.description,m.destination,m.price,m.cost_price,m.image_url,m.category_id,c.name AS category_name,
       COALESCE(ms.track_stock,false) AS track_stock,ms.quantity AS stock_quantity
     FROM menu_items m LEFT JOIN menu_categories c ON c.tenant_id=m.tenant_id AND c.id=m.category_id
@@ -356,7 +390,7 @@ app.put('/api/menu/:menuItemId/stock', authenticate, requireManagerOrOwner, asyn
   res.status(result.status).json(result.body);
 }));
 
-app.get('/api/sessions', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+app.get('/api/sessions', authenticate, requireKdsOrPosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT s.*,t.table_code,t.display_name AS table_name
     FROM dining_sessions s JOIN dining_tables t ON t.tenant_id=s.tenant_id AND t.outlet_id=s.outlet_id AND t.id=s.table_id
     WHERE s.tenant_id=$1 AND s.outlet_id=$2 AND s.status IN ('active','billing')
@@ -387,7 +421,7 @@ app.post('/api/sessions', authenticate, requirePosRole, asyncRoute(async (req,re
   });
   res.status(result.status).json(result.body);
 }));
-app.get('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+app.get('/api/sessions/:sessionId/orders', authenticate, requireKdsOrPosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT b.id AS batch_id,b.batch_number,b.status AS batch_status,b.note,b.created_at,
     oi.id,oi.menu_item_id,oi.item_name_snapshot,oi.category_snapshot,oi.destination,oi.unit_price,oi.quantity,oi.modifier_total,oi.line_total,oi.notes,oi.cooking_status,oi.is_served,oi.served_at
     FROM order_batches b LEFT JOIN order_items oi ON oi.tenant_id=b.tenant_id AND oi.outlet_id=b.outlet_id AND oi.batch_id=b.id
@@ -396,7 +430,7 @@ app.get('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRo
   res.json(rows.rows);
 }));
 
-app.patch('/api/sessions/:sessionId/orders/:itemId', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+app.patch('/api/sessions/:sessionId/orders/:itemId', authenticate, requireKdsOrPosRole, asyncRoute(async (req,res) => {
   const { cookingStatus, isServed } = req.body || {};
   const allowedStatuses = ['queue','cooking','ready','handed_off'];
   if ((cookingStatus !== undefined && !allowedStatuses.includes(cookingStatus)) ||
@@ -456,7 +490,21 @@ app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncR
     const stockByMenu=new Map(stockRows.rows.map(x=>[x.menu_item_id,x]));
     for (const [menuId,qty] of required) {
       const stock=stockByMenu.get(menuId);
-      if (stock?.track_stock && Number(stock.quantity)<qty) return {status:409,body:{error:'Stok menu tidak mencukupi.',code:'INSUFFICIENT_MENU_STOCK',menuItemId:menuId,available:Number(stock.quantity),requested:qty}};
+      if (stock?.track_stock && Number(stock.quantity)<qty) {
+        const availableStock=Number(stock.quantity);
+        return {
+          status:409,
+          body:{
+            error:'Stok menu tidak mencukupi.',
+            code:'STOCK_UNAVAILABLE',
+            legacyCode:'INSUFFICIENT_MENU_STOCK',
+            menuItemId:menuId,
+            available:availableStock,
+            availableStock,
+            requested:qty,
+          },
+        };
+      }
     }
     const next = await c.query('SELECT COALESCE(MAX(batch_number),0)+1 AS n FROM order_batches WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     const batch = (await c.query(`INSERT INTO order_batches(tenant_id,outlet_id,session_id,batch_number,created_by_staff_id,status,note,submitted_at)
@@ -568,6 +616,7 @@ app.patch('/api/order-batches/:batchId/cancel', authenticate, requireManagerOrOw
 }));
 
 app.patch('/api/order-items/:itemId/cancel', authenticate, requireManagerOrOwner, asyncRoute(async(req,res)=>{
+  const reason = req.body?.reason ? String(req.body.reason).trim().slice(0, 500) : null;
   const result=await scoped(req,async c=>{
     const ref=await c.query('SELECT session_id FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
     if(!ref.rowCount) return {status:404,body:{error:'Item pesanan tidak ditemukan.'}};
@@ -585,14 +634,14 @@ app.patch('/api/order-items/:itemId/cancel', authenticate, requireManagerOrOwner
     if(stock.rowCount&&stock.rows[0].track_stock&&sold.rowCount) {
       await c.query('UPDATE menu_stock SET quantity=quantity+$1,updated_at=now(),updated_by_staff_id=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND menu_item_id=$5',[item.rows[0].quantity,req.auth.staff_id,req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
       await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,order_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
-        VALUES($1,$2,$3,$4,'return',$5,'order_item',$4,'Manager item cancellation',$6)`,
-        [req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id,item.rows[0].id,item.rows[0].quantity,req.auth.staff_id]);
+        VALUES($1,$2,$3,$4,'return',$5,'order_item',$4,$6,$7)`,
+        [req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id,item.rows[0].id,item.rows[0].quantity,reason||'Manager item cancellation',req.auth.staff_id]);
       restored=true;
     }
     await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'order_item.cancelled','order_item',$4,$5::jsonb)",
-      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.itemId,JSON.stringify({stockRestored:restored,quantity:item.rows[0].quantity})]);
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.itemId,JSON.stringify({stockRestored:restored,quantity:item.rows[0].quantity,reason})]);
     await c.query('UPDATE dining_sessions SET version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
-    return {status:200,body:{ok:true,itemId:req.params.itemId,stockRestored:restored}};
+    return {status:200,body:{ok:true,itemId:req.params.itemId,stockRestored:restored,reason}};
   });
   res.status(result.status).json(result.body);
 }));
@@ -643,7 +692,7 @@ app.patch('/api/payments/:paymentId/settle', authenticate, requireSettlementRole
   res.status(result.status).json(result.body);
 }));
 
-app.patch('/api/order-items/:itemId/kitchen-status', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+app.patch('/api/order-items/:itemId/kitchen-status', authenticate, requireKdsOrPosRole, asyncRoute(async (req,res) => {
   const allowed=['queue','cooking','ready','handed_off'];
   const status=req.body?.status;
   if (!allowed.includes(status)) return res.status(400).json({error:'Status KDS tidak valid.'});
@@ -654,7 +703,7 @@ app.patch('/api/order-items/:itemId/kitchen-status', authenticate, requirePosRol
 }));
 
 // All outlet data endpoints set transaction-local RLS context after resolving the server-side session.
-app.get('/api/tables', authenticate, requirePosRole, asyncRoute(async (req,res) => {
+app.get('/api/tables', authenticate, requireKdsOrPosRole, asyncRoute(async (req,res) => {
   const rows = await transaction(async c => {
     await setRlsContext(c, { tenant_id: req.auth.tenant_id, outlet_id: req.auth.outlet_id, actor_staff_id: req.auth.staff_id, role_code: req.auth.role_code, capabilities: ['tenant_scope'] });
     return (await c.query('SELECT * FROM v_table_board WHERE tenant_id=$1 AND outlet_id=$2 ORDER BY table_code',[req.auth.tenant_id,req.auth.outlet_id])).rows;
@@ -689,9 +738,19 @@ async function assertSafeRuntimeRole() {
     throw new Error('Unsafe DATABASE_URL role. API requires a dedicated non-owner role with NOSUPERUSER, NOBYPASSRLS and no privileged role memberships. Neon-managed INHERIT is accepted only when no memberships exist.');
   }
 }
-await assertSafeRuntimeRole();
+let runtimeRoleCheckPromise = null;
+function ensureSafeRuntimeRole() {
+  if (!runtimeRoleCheckPromise) {
+    runtimeRoleCheckPromise = assertSafeRuntimeRole().catch((err) => {
+      runtimeRoleCheckPromise = null;
+      throw err;
+    });
+  }
+  return runtimeRoleCheckPromise;
+}
 
 if (!process.env.VERCEL) {
+  await assertSafeRuntimeRole();
   const port=Number(process.env.PORT || 8080);
   const server=app.listen(port,'0.0.0.0',()=>console.log('Gastro-Cashier API listening on '+port));
   async function shutdown(){server.close();await pool.end();await bootstrapPool?.end();process.exit(0);}

@@ -90,7 +90,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     icon: React.ReactNode;
     badge?: number;
     alert?: boolean;
-    roles: ('owner' | 'cashier' | 'finance')[];
+    roles: ('owner' | 'manager' | 'cashier' | 'waiter' | 'kitchen' | 'finance')[];
   }[] = [
     {
       id: 'owner',
@@ -108,14 +108,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       id: 'floor',
       label: 'Floor Plan',
       icon: <Store className="w-4 h-4 stroke-[2]" />,
-      roles: ['owner', 'cashier'],
+      roles: ['owner', 'manager', 'cashier', 'waiter'],
     },
     {
       id: 'kds',
       label: 'KDS Dapur',
       icon: <Flame className="w-4 h-4 stroke-[2]" />,
       badge: activeKdsCount > 0 ? activeKdsCount : undefined,
-      roles: ['owner', 'cashier'],
+      roles: ['owner', 'manager', 'cashier', 'waiter', 'kitchen'],
     },
     {
       id: 'checker',
@@ -123,7 +123,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: <CheckSquare className="w-4 h-4 stroke-[2]" />,
       badge: waiterPickupCount > 0 ? waiterPickupCount : undefined,
       alert: waiterPickupCount > 0,
-      roles: ['owner', 'cashier'],
+      roles: ['owner', 'manager', 'cashier', 'waiter'],
     },
     {
       id: 'inventory',
@@ -131,14 +131,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: <Boxes className="w-4 h-4 stroke-[2]" />,
       badge: lowStockAlertCount > 0 ? lowStockAlertCount : undefined,
       alert: lowStockAlertCount > 0,
-      roles: ['owner', 'finance', 'cashier'],
+      roles: ['owner', 'manager', 'finance', 'cashier', 'waiter'],
     },
     {
       id: 'printer',
       label: 'Printer Hub',
       icon: <Printer className="w-4 h-4 stroke-[2]" />,
       badge: recentTicketsCount > 0 ? recentTicketsCount : undefined,
-      roles: ['owner', 'cashier'],
+      roles: ['owner', 'manager', 'cashier', 'waiter'],
     },
     {
       id: 'finance',

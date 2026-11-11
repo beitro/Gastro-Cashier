@@ -82,7 +82,7 @@ export function authenticateStaff(staff: StaffAccount): StaffAccount | null {
   return { ...migrated, role: membership.role, outletId: membership.outletId, outletName: membership.outletName };
 }
 export function canOperatePOS(staff: StaffAccount | null): boolean {
-  return !!staff && staff.status !== 'blocked' && staff.status !== 'inactive' && staff.role !== 'finance';
+  return !!staff && staff.status !== 'blocked' && staff.status !== 'inactive' && ['owner', 'manager', 'cashier', 'waiter'].includes(staff.role);
 }
 export function canApproveCancellation(staff: StaffAccount | null): boolean { return !!staff && (staff.role === 'owner' || staff.role === 'manager') && staff.status !== 'blocked' && staff.status !== 'inactive'; }
 export function isSameOutlet(staff: StaffAccount | null, table: Table): boolean {
@@ -95,7 +95,7 @@ export function assertTableAccess(staff: StaffAccount | null, table: Table, txs:
   if (staff.status && staff.status !== 'active') { audit('table.select','deny','Akun nonaktif/diblokir',staff,table); return { ok:false as const, message:'Akun staff tidak aktif.' }; }
   if (!canOperatePOS(staff)) { audit('table.select','deny','Role tidak memiliki akses POS',staff,table); return { ok:false as const, message:'Role Anda tidak memiliki akses POS.' }; }
   if (!isSameOutlet(staff,table)) { audit('table.select','deny','Outlet tidak cocok',staff,table); return { ok:false as const, message:'Akses ditolak: meja berada di outlet lain.' }; }
-  if (table.status === 'reserved' && table.reservedByStaffId && table.reservedByStaffId !== staff.id && staff.role !== 'owner') {
+  if (table.status === 'reserved' && table.reservedByStaffId && table.reservedByStaffId !== staff.id && staff.role !== 'owner' && staff.role !== 'manager') {
     audit('table.reserved','deny','Izin reservasi ditolak',staff,table); return { ok:false as const, message:'Reservasi ini hanya dapat dibuka oleh staff yang ditugaskan.' };
   }
   audit('table.select','allow','Akses meja diizinkan',staff,table);

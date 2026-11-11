@@ -21,7 +21,7 @@ import {
   countWaiterPickupItems,
   isItemWaitingForWaiter,
 } from './utils/posCalculations';
-import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
+import { assertTableAccess, audit, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
 import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, updateApiOrderItem, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock, mapApiMenuToMenuItems, cancelApiOrderItem } from './services/posApi';
 
@@ -614,6 +614,8 @@ export default function App() {
       setActiveTab('owner');
     } else if (staff.role === 'finance') {
       setActiveTab('finance');
+    } else if (staff.role === 'kitchen') {
+      setActiveTab('kds');
     } else {
       setActiveTab('floor');
     }
@@ -718,12 +720,16 @@ export default function App() {
       setTables(snapshot.tables);
       setActiveTransactions(snapshot.transactions);
       setApiMenu(snapshot.menu);
+      const stock = mapApiMenuToStock(snapshot.menu, MENU_ITEMS);
+      menuStockRef.current = stock;
+      setMenuStock(stock);
       setAllPrintTickets(prev => [...newTickets, ...prev]);
       setOrderModalTable(null);
       setPrinterModalTickets(newTickets);
       setShowPrinterModal(true);
       if (soundEnabled) { sounds.playPrinterSound(); setTimeout(() => sounds.playBellSound(), 350); }
     } catch (error) {
+      await refreshApiSnapshot().catch(() => undefined);
       window.alert('Pesanan gagal disimpan ke database. Tidak ada transaksi lokal pengganti yang dibuat. ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
@@ -780,7 +786,7 @@ export default function App() {
     }
   };
 
-  const handleRequestCancellation = (request: Omit<CancellationRequest, 'id' | 'requestedAt' | 'requestedBy'>) => {
+  const handleRequestCancellation = (request: Omit<CancellationRequest, 'id' | 'requestedAt' | 'requestedBy' | 'requestedById'>) => {
     const exists = cancellationRequests.some((entry) => entry.transactionId === request.transactionId && entry.itemId === request.itemId);
     if (exists) return;
     setCancellationRequests((prev) => [{
@@ -788,6 +794,7 @@ export default function App() {
       id: `pending:${Date.now()}:${request.itemId}`,
       requestedAt: new Date().toISOString(),
       requestedBy: currentStaff?.name || 'Staff',
+      requestedById: currentStaff?.id,
     }, ...prev]);
   };
 
@@ -814,8 +821,9 @@ export default function App() {
       return;
     }
     try {
-      await cancelApiOrderItem(item.id);
+      await cancelApiOrderItem(item.id, request.reason);
       await refreshApiSnapshot();
+      audit('order_item.cancelled', 'allow', `Pembatalan item ${request.itemName} disetujui (${request.reason})`, currentStaff);
       setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
     } catch (error) {
       window.alert('Pembatalan ditolak database; stok tidak diubah di perangkat ini. ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -1172,7 +1180,7 @@ export default function App() {
           menuStock={menuStock}
           transactions={activeTransactions}
           requests={cancellationRequests}
-          isManager={currentStaff?.role === 'owner'}
+          isManager={canApproveCancellation(currentStaff)}
           onRequestCancellation={handleRequestCancellation}
           onApproveCancellation={handleApproveCancellation}
           onRejectCancellation={handleRejectCancellation}

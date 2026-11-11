@@ -110,6 +110,18 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canManagePettyCash: true,
         canResetDemo: true,
       };
+    case 'manager':
+      return {
+        canOperatePOS: true,
+        canAccessKds: true,
+        canAccessChecker: true,
+        canAccessInventory: true,
+        canApproveCancellation: true,
+        canAccessFinance: false,
+        canAccessOwnerDashboard: false,
+        canManagePettyCash: false,
+        canResetDemo: false,
+      };
     case 'finance':
       return {
         canOperatePOS: false,
@@ -122,6 +134,19 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canManagePettyCash: true,
         canResetDemo: false,
       };
+    case 'kitchen':
+      return {
+        canOperatePOS: false,
+        canAccessKds: true,
+        canAccessChecker: false,
+        canAccessInventory: false,
+        canApproveCancellation: false,
+        canAccessFinance: false,
+        canAccessOwnerDashboard: false,
+        canManagePettyCash: false,
+        canResetDemo: false,
+      };
+    case 'waiter':
     case 'cashier':
     default:
       return {

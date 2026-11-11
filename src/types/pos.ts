@@ -144,7 +144,7 @@ export interface PrintTicket {
   };
 }
 
-export type UserRole = 'owner' | 'manager' | 'cashier' | 'finance';
+export type UserRole = 'owner' | 'manager' | 'cashier' | 'waiter' | 'kitchen' | 'finance';
 
 export interface StaffAccount {
   id: string;

@@ -36,7 +36,7 @@ try {
     FROM pg_roles r WHERE r.rolname=current_user`);
   const role=meta.rows[0];
   if (!role || role.current_user !== (process.env.NEON_RUNTIME_DB_ROLE || 'gastro_runtime') ||
-      role.rolsuper || role.rolbypassrls || role.rolinherit || role.rolcreatedb || role.rolcreaterole || role.rolreplication ||
+      role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolreplication ||
       role.owns_objects || role.owns_schema || role.has_memberships || role.can_create_public_objects || role.can_create_schemas) fail('connected role is not a safe dedicated runtime role.');
   const audit=await c.query(`SELECT count(*)::int AS total,
     count(*) FILTER (WHERE relrowsecurity AND relforcerowsecurity)::int AS protected

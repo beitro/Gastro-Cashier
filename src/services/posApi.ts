@@ -1,4 +1,4 @@
-import type { MenuItem, OrderItem, Table, Transaction, OrderBatch } from '../types/pos';
+import type { MenuItem, OrderItem, SelectedModifier, Table, Transaction, OrderBatch } from '../types/pos';
 
 const TOKEN_KEY = 'gastro_cashier_api_token';
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
@@ -23,7 +23,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || 'Permintaan POS gagal (' + response.status + ').');
+  if (!response.ok) {
+    const err = new Error(body.error || 'Permintaan POS gagal (' + response.status + ').') as Error & {
+      status?: number;
+      code?: string;
+      body?: Record<string, any>;
+    };
+    err.status = response.status;
+    err.code = body.code;
+    err.body = body;
+    throw err;
+  }
   return body as T;
 }
 
@@ -44,9 +54,63 @@ function mapTable(row: ApiRow): Table {
   };
 }
 
+const MODIFIERS_PREFIX = '[Modifiers: ';
+
+function serializeOrderNotes(modifiers: SelectedModifier[] | undefined, userNotes: string | undefined): string {
+  const cleanNotes = (userNotes || '').trim();
+  if (!modifiers || modifiers.length === 0) return cleanNotes;
+  const serialized = modifiers
+    .map((m) => {
+      const group = String(m.groupName || 'Option').replace(/[|;\]]/g, '').trim();
+      const option = String(m.optionName || '').replace(/[|;\]]/g, '').trim();
+      const delta = Number(m.priceDelta || 0);
+      return `${group}: ${option} (+Rp${delta})`;
+    })
+    .join('; ');
+  const prefix = `${MODIFIERS_PREFIX}${serialized}]`;
+  return cleanNotes ? `${prefix} ${cleanNotes}` : prefix;
+}
+
+function parseOrderNotes(rawNotes: string | null | undefined): { selectedModifiers: SelectedModifier[]; notes: string } {
+  const raw = String(rawNotes || '');
+  if (!raw.startsWith(MODIFIERS_PREFIX)) {
+    return { selectedModifiers: [], notes: raw };
+  }
+  const endIdx = raw.indexOf(']');
+  if (endIdx === -1) {
+    return { selectedModifiers: [], notes: raw };
+  }
+  const inner = raw.slice(MODIFIERS_PREFIX.length, endIdx);
+  const rest = raw.slice(endIdx + 1).trim();
+  const selectedModifiers: SelectedModifier[] = inner
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const match = entry.match(/^([^:]+):\s*(.+?)\s*\(\+Rp(-?\d+(?:\.\d+)?)\)$/);
+      if (match) {
+        return {
+          groupName: match[1].trim(),
+          optionName: match[2].trim(),
+          priceDelta: Number(match[3]) || 0,
+        };
+      }
+      const [groupName, ...optParts] = entry.split(':');
+      return {
+        groupName: (groupName || 'Option').trim(),
+        optionName: optParts.join(':').trim() || entry,
+        priceDelta: 0,
+      };
+    });
+  return { selectedModifiers, notes: rest };
+}
+
 function mapOrder(row: ApiRow): OrderItem {
   const unitPrice = Number(row.unit_price || 0);
   const quantity = Number(row.quantity || 0);
+  const { selectedModifiers, notes } = parseOrderNotes(row.notes);
+  const modifierDeltaPerUnit = selectedModifiers.reduce((sum, m) => sum + Number(m.priceDelta || 0), 0);
+  const baseLineTotal = Number(row.line_total || unitPrice * quantity);
   return {
     id: row.id,
     menuItemId: row.menu_item_id,
@@ -57,9 +121,9 @@ function mapOrder(row: ApiRow): OrderItem {
     destination: row.destination === 'bar' ? 'bar' : 'kitchen',
     unitPrice,
     quantity,
-    selectedModifiers: [],
-    notes: row.notes || '',
-    subtotal: Number(row.line_total || unitPrice * quantity),
+    selectedModifiers,
+    notes,
+    subtotal: baseLineTotal + modifierDeltaPerUnit * quantity,
     batchNumber: Number(row.batch_number || 1),
     isServed: Boolean(row.is_served),
     cookingStatus: row.cooking_status || 'queue',
@@ -130,10 +194,17 @@ export async function loadPosSnapshot(): Promise<PosSnapshot> {
 }
 
 export async function openApiSession(table: Table, guestCount: number, waiterStaffId?: string): Promise<ApiRow> {
-  return request<ApiRow>('/api/sessions', {
-    method: 'POST',
-    body: JSON.stringify({ tableId: table.id, guestCount, waiterStaffId }),
-  });
+  try {
+    return await request<ApiRow>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ tableId: table.id, guestCount, waiterStaffId }),
+    });
+  } catch (error: any) {
+    if (error?.status === 409 && error?.body?.sessionId) {
+      return { id: String(error.body.sessionId), existing: true };
+    }
+    throw error;
+  }
 }
 
 export async function updateApiOrderItem(
@@ -150,10 +221,9 @@ export async function updateApiOrderItem(
 export async function submitApiOrder(sessionId: string, items: OrderItem[], menu: ApiRow[]): Promise<ApiRow> {
   const bySku = new Map(menu.filter(row => row.sku).map(row => [String(row.sku), String(row.id)]));
   const payload = items.map(item => {
-    if (item.selectedModifiers?.length) throw new Error('Pilihan modifier belum didukung oleh API transaksi. Hapus modifier sebelum mengirim pesanan.');
-    const menuItemId = bySku.get(item.menuItemId);
+    const menuItemId = bySku.get(item.menuItemId) || (menu.some(row => String(row.id) === item.menuItemId) ? item.menuItemId : undefined);
     if (!menuItemId) throw new Error('SKU menu ' + item.menuItemId + ' tidak ditemukan di katalog API. Pesanan tidak dikirim.');
-    return { menuItemId, quantity: item.quantity, notes: item.notes || '' };
+    return { menuItemId, quantity: item.quantity, notes: serializeOrderNotes(item.selectedModifiers, item.notes) };
   });
   const fingerprint=JSON.stringify(payload);
   let hash=2166136261;
@@ -183,8 +253,11 @@ export async function settleApiSession(sessionId: string, method: 'cash' | 'qris
   return result;
 }
 
-export async function cancelApiOrderItem(itemId: string): Promise<ApiRow> {
-  return request<ApiRow>('/api/order-items/' + encodeURIComponent(itemId) + '/cancel', { method: 'PATCH', body: JSON.stringify({}) });
+export async function cancelApiOrderItem(itemId: string, reason?: string): Promise<ApiRow> {
+  return request<ApiRow>('/api/order-items/' + encodeURIComponent(itemId) + '/cancel', {
+    method: 'PATCH',
+    body: JSON.stringify(reason ? { reason } : {}),
+  });
 }
 
 export function mapPaymentToTransaction(transaction: Transaction, payment: ApiRow): Transaction {

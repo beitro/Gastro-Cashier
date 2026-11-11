@@ -825,8 +825,8 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                               {inCartQty}x Dipilih
                             </span>
                           )}
-                          <span className="text-xs text-slate-500 font-mono tabular-nums font-bold">
-                            Stok {availableStock}
+                          <span className={`text-xs font-mono tabular-nums font-bold ${availableStock <= 0 ? 'text-rose-700 font-black' : 'text-slate-500'}`}>
+                            {availableStock <= 0 ? 'Stok habis' : `Stok ${availableStock}`}
                           </span>
                         </div>
                       </div>
@@ -849,9 +849,10 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                         <button
                           type="button"
                           onClick={() => handleOpenCustomize(item)}
+                          disabled={isOutOfStock}
                           title="Pilih Catatan / Modifier"
                           aria-label={`Catatan atau modifier untuk ${item.name}`}
-                          className="min-w-[46px] min-h-[46px] flex items-center justify-center clay-btn-neutral text-amber-700 cursor-pointer"
+                          className={`min-w-[46px] min-h-[46px] flex items-center justify-center clay-btn-neutral text-amber-700 ${isOutOfStock ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
                         >
                           <Edit3 className="w-4 h-4" />
                         </button>
@@ -859,11 +860,12 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                         <button
                           type="button"
                           onClick={() => handleQuickAdd(item)}
+                          disabled={isOutOfStock}
                           aria-label={`Pilih ${item.name}`}
-                          className="min-h-[46px] px-4 py-2.5 clay-btn-emerald font-extrabold text-xs sm:text-sm flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                          className={`min-h-[46px] px-4 py-2.5 font-extrabold text-xs sm:text-sm flex items-center gap-1.5 whitespace-nowrap shrink-0 ${isOutOfStock ? 'clay-btn-disabled cursor-not-allowed opacity-60' : 'clay-btn-emerald cursor-pointer'}`}
                         >
                           <Plus className="w-4 h-4" />
-                          <span>Pilih</span>
+                          <span>{availableStock <= 0 ? 'Stok habis' : 'Pilih'}</span>
                         </button>
                       </div>
                     </div>

@@ -14,6 +14,7 @@ export interface CancellationRequest {
   quantity: number;
   reason: string;
   requestedBy: string;
+  requestedById?: string;
   requestedAt: string;
 }
 
@@ -22,7 +23,8 @@ interface MenuStockControlProps {
   transactions: Record<string, Transaction>;
   requests: CancellationRequest[];
   isManager: boolean;
-  onRequestCancellation: (request: Omit<CancellationRequest, 'id' | 'requestedAt' | 'requestedBy'>) => void;
+  currentStaffId?: string;
+  onRequestCancellation: (request: Omit<CancellationRequest, 'id' | 'requestedAt' | 'requestedBy' | 'requestedById'>) => void;
   onApproveCancellation: (requestId: string) => void;
   onRejectCancellation: (requestId: string) => void;
 }
@@ -84,7 +86,7 @@ export const MenuStockControl: React.FC<MenuStockControlProps> = ({
                   <span className={stock > 0 ? 'text-emerald-700 font-black text-xl' : 'text-rose-700 font-black text-xl'}>{stock}</span>
                   <span className="text-[10px] text-slate-500">tersedia</span>
                 </div>
-                {stock === 0 && <span className="text-[10px] font-black text-rose-700">HABIS · MENU NONAKTIF</span>}
+                {stock === 0 && <span className="text-[10px] font-black text-rose-700">Stok habis · MENU NONAKTIF</span>}
               </article>;
             })}
           </div>
