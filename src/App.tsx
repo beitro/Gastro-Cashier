@@ -430,7 +430,6 @@ const INITIAL_TRANSACTIONS: Record<string, Transaction> = {
 export default function App() {
   // State Initialization
   const [tables, setTables] = useState<Table[]>(() => {
-    if (localStorage.getItem('gastro_cashier_api_token')) return [];
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TABLES);
       if (saved) return migrateTables(JSON.parse(saved));
@@ -439,7 +438,6 @@ export default function App() {
   });
 
   const [activeTransactions, setActiveTransactions] = useState<Record<string, Transaction>>(() => {
-    if (localStorage.getItem('gastro_cashier_api_token')) return {};
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
       if (saved) return migrateTransactions(JSON.parse(saved));
