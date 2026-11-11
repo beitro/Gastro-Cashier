@@ -355,6 +355,22 @@ app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=
   if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone)))||(nfcUid&&nfcUid.length>200)){
     return res.status(400).json({error:'Nama lengkap, role POS, dan PIN (4–8 digit) wajib valid.'});
   }
+
+  // Guard: PIN yang sudah digunakan tidak boleh digunakan lagi
+  const existingPins = await adminScoped(req, async c => {
+    return c.query(`
+      SELECT a.id, a.pin_hash 
+      FROM staff_accounts a 
+      JOIN tenant_memberships tm ON tm.staff_id=a.id 
+      WHERE tm.tenant_id=$1 AND a.pin_hash IS NOT NULL
+    `, [req.auth.tenant_id]);
+  });
+  for (const row of existingPins.rows) {
+    if (await verifyCredential(pin, row.pin_hash)) {
+      return res.status(400).json({ error: 'PIN ini sudah digunakan oleh akun lain. Gunakan kombinasi PIN yang berbeda.' });
+    }
+  }
+
   const pinHash=await hashCredential(pin);
   const nfcHash=nfcUid?await hashCredential(nfcUid):null;
   const staffId=randomUUID();
@@ -385,6 +401,26 @@ app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=
 app.patch('/api/admin/staff/:staffId/pin',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const pin=String(req.body?.pin||'').trim();
   if(!/^\d{4,8}$/.test(pin))return res.status(400).json({error:'PIN baru harus terdiri dari 4–8 digit angka.'});
+
+  // Guard: PIN yang sudah digunakan tidak boleh digunakan lagi
+  const existingPins = await adminScoped(req, async c => {
+    return c.query(`
+      SELECT a.id, a.pin_hash 
+      FROM staff_accounts a 
+      JOIN tenant_memberships tm ON tm.staff_id=a.id 
+      WHERE tm.tenant_id=$1 AND a.pin_hash IS NOT NULL
+    `, [req.auth.tenant_id]);
+  });
+  for (const row of existingPins.rows) {
+    if (await verifyCredential(pin, row.pin_hash)) {
+      return res.status(400).json({
+        error: row.id === req.params.staffId
+          ? 'PIN baru tidak boleh sama dengan PIN saat ini.'
+          : 'PIN ini sudah digunakan oleh akun lain. Gunakan kombinasi PIN yang berbeda.'
+      });
+    }
+  }
+
   const pinHash=await hashCredential(pin);
   const result=await adminScoped(req,async c=>{
     const member=await c.query('SELECT tm.id,a.display_name FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF a',[req.auth.tenant_id,req.params.staffId]);
@@ -479,6 +515,27 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
   if(pin===null&&uid===null&&!clearNfc)return res.status(400).json({error:'PIN baru atau NFC UID wajib diisi.'});
   if(pin!==null&&!/^\d{4,8}$/.test(pin))return res.status(400).json({error:'PIN harus 4–8 digit.'});
   if(uid!==null&&(!uid||uid.length>200))return res.status(400).json({error:'NFC UID tidak valid.'});
+
+  if (pin !== null) {
+    const existingPins = await adminScoped(req, async c => {
+      return c.query(`
+        SELECT a.id, a.pin_hash 
+        FROM staff_accounts a 
+        JOIN tenant_memberships tm ON tm.staff_id=a.id 
+        WHERE tm.tenant_id=$1 AND a.pin_hash IS NOT NULL
+      `, [req.auth.tenant_id]);
+    });
+    for (const row of existingPins.rows) {
+      if (await verifyCredential(pin, row.pin_hash)) {
+        return res.status(400).json({
+          error: row.id === req.params.staffId
+            ? 'PIN baru tidak boleh sama dengan PIN saat ini.'
+            : 'PIN ini sudah digunakan oleh akun lain. Gunakan kombinasi PIN yang berbeda.'
+        });
+      }
+    }
+  }
+
   const pinHash=pin===null?null:await hashCredential(pin),nfcHash=uid===null?null:await hashCredential(uid);
   const result=await adminScoped(req,async c=>{
     const member=await c.query('SELECT tm.id FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id WHERE tm.tenant_id=$1 AND tm.staff_id=$2 AND om.outlet_id=$3',[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);

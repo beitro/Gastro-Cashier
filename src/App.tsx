@@ -1243,6 +1243,7 @@ export default function App() {
   };
 
   // STEP 7: SETTLEMENT & CLOSE TABLE
+  const [isSettlingPayment, setIsSettlingPayment] = useState(false);
   const handleCompleteSettlement = async (params: {
     transactionId: string;
     tableId: string;
@@ -1301,6 +1302,7 @@ export default function App() {
       return;
     }
 
+    setIsSettlingPayment(true);
     try {
       const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven, cardBank);
       if (payment.status !== 'settled') {
@@ -1326,6 +1328,8 @@ export default function App() {
       if (soundEnabled) sounds.playPrinterSound();
     } catch (error) {
       window.alert('Pembayaran belum dikonfirmasi oleh database. Jangan ulangi dengan nominal berbeda. ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsSettlingPayment(false);
     }
   };
 
@@ -1422,6 +1426,7 @@ export default function App() {
         soundEnabled={soundEnabled}
         setSoundEnabled={setSoundEnabled}
         onResetData={handleRefreshData}
+        isRefreshing={isRefreshing}
         recentTicketsCount={allPrintTickets.length}
         lowStockAlertCount={Object.values(menuStock).filter((stock) => stock === 0).length}
         activeKdsCount={countActiveKdsItems(activeTransactions)}
@@ -1456,6 +1461,7 @@ export default function App() {
             onSwitchToFinance={() => setActiveTab('finance')}
             onRestockMaterial={handleRestockMaterial}
             onResetData={handleRefreshData}
+            isRefreshing={isRefreshing}
             onLockScreen={handleLockScreen}
             autoLockMinutes={autoLockMinutes}
             onUpdateAutoLockMinutes={handleUpdateAutoLockMinutes}
@@ -1559,6 +1565,7 @@ export default function App() {
           table={paymentModalTable}
           transaction={activeTransactions[paymentModalTable.currentTransactionId]}
           onClose={() => setPaymentModalTable(null)}
+          isSubmitting={isSettlingPayment}
           onCompleteSettlement={handleCompleteSettlement}
         />
       )}

@@ -29,6 +29,7 @@ interface NavbarProps {
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
   onResetData: () => void;
+  isRefreshing?: boolean;
   recentTicketsCount: number;
   lowStockAlertCount: number;
   activeKdsCount?: number;
@@ -46,6 +47,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   soundEnabled,
   setSoundEnabled,
   onResetData,
+  isRefreshing = false,
   recentTicketsCount,
   lowStockAlertCount,
   activeKdsCount = 0,
@@ -327,11 +329,14 @@ export const Navbar: React.FC<NavbarProps> = ({
         <button
           type="button"
           onClick={onResetData}
-          title="Refresh Data & Sinkronisasi API"
+          disabled={isRefreshing}
+          title={isRefreshing ? 'Sedang Menyinkronkan...' : 'Refresh Data & Sinkronisasi API'}
           aria-label="Refresh Data & Sinkronisasi API"
-          className="min-w-[42px] min-h-[42px] clay-btn-neutral flex items-center justify-center text-slate-700 hover:text-emerald-700 cursor-pointer shrink-0"
+          className={`min-w-[42px] min-h-[42px] clay-btn-neutral flex items-center justify-center text-slate-700 hover:text-emerald-700 cursor-pointer shrink-0 ${
+            isRefreshing ? 'opacity-70 cursor-wait' : ''
+          }`}
         >
-          <RefreshCw className="w-[18px] h-[18px] stroke-[2]" />
+          <RefreshCw className={`w-[18px] h-[18px] stroke-[2] ${isRefreshing ? 'animate-spin text-emerald-700' : ''}`} />
         </button>
       </div>
     </header>

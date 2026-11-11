@@ -10,6 +10,7 @@ import {
   Percent,
   AlertCircle,
   ArrowLeftRight,
+  Loader2,
 } from 'lucide-react';
 import { sounds } from '../utils/soundEffects';
 
@@ -17,6 +18,7 @@ interface PaymentModalProps {
   table: Table;
   transaction: Transaction;
   onClose: () => void;
+  isSubmitting?: boolean;
   onCompleteSettlement: (params: {
     transactionId: string;
     tableId: string;
@@ -32,6 +34,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   table,
   transaction,
   onClose,
+  isSubmitting = false,
   onCompleteSettlement,
 }) => {
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris' | 'card' | 'transfer'>('cash');
@@ -68,7 +71,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   };
 
   const handleProcessPayment = () => {
-    if (!isCashSufficient) return;
+    if (!isCashSufficient || isSubmitting) return;
 
     sounds.playCashRegisterSound();
     onCompleteSettlement({
@@ -419,16 +422,25 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           <div className="mt-5 pt-4 border-t border-slate-200/80 space-y-2.5">
             <button
               type="button"
-              disabled={!isCashSufficient}
+              disabled={!isCashSufficient || isSubmitting}
               onClick={handleProcessPayment}
               className={`w-full min-h-[60px] py-4 px-5 font-black text-sm sm:text-base flex items-center justify-center gap-2.5 whitespace-nowrap ${
-                isCashSufficient
+                isCashSufficient && !isSubmitting
                   ? 'clay-btn-emerald cursor-pointer'
-                  : 'clay-btn-disabled cursor-not-allowed'
+                  : 'clay-btn-disabled cursor-not-allowed opacity-75'
               }`}
             >
-              <Receipt className="w-5 h-5 shrink-0" />
-              <span>{paymentMethod === 'cash' ? 'SELESAIKAN PEMBAYARAN & TUTUP MEJA' : 'CATAT PEMBAYARAN PENDING'}</span>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-5 h-5 shrink-0 animate-spin" />
+                  <span>MEMPROSES PEMBAYARAN...</span>
+                </>
+              ) : (
+                <>
+                  <Receipt className="w-5 h-5 shrink-0" />
+                  <span>{paymentMethod === 'cash' ? 'SELESAIKAN PEMBAYARAN & TUTUP MEJA' : 'CATAT PEMBAYARAN PENDING'}</span>
+                </>
+              )}
             </button>
             <p className="text-xs text-center text-slate-500 font-semibold">
               {paymentMethod === 'cash' ? 'Pembayaran tunai dilunasi dan meja ditutup.' : 'Meja tetap aktif sampai Finance/Manager mengonfirmasi pembayaran. Struk lunas belum diterbitkan.'}

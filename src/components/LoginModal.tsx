@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   Scan,
   Lock,
+  Loader2,
 } from 'lucide-react';
 
 const MAX_PIN_ATTEMPTS = 5;
@@ -55,7 +56,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockUntil, setLockUntil] = useState<number | null>(null);
   const [lockRemainingSec, setLockRemainingSec] = useState(0);
-  const isPinLocked = lockUntil !== null && Date.now() < lockUntil;
+  const [isVerifying, setIsVerifying] = useState(false);
+  const isPinLocked = (lockUntil !== null && Date.now() < lockUntil) || isVerifying;
 
   useEffect(() => {
     if (!lockUntil) {
@@ -141,6 +143,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setErrorMessage('PIN harus 4–8 digit angka.');
       return;
     }
+    setIsVerifying(true);
     try {
       // In live production mode (isDemo === false), do not allow local demo fallback.
       // Must authenticate against backend API with real database hash.
@@ -185,9 +188,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         setErrorMessage((error instanceof Error ? error.message : 'PIN tidak valid') + ' · Sisa percobaan: ' + (MAX_PIN_ATTEMPTS - n));
       }
       setTimeout(() => setPin(''), 600);
+    } finally {
+      setIsVerifying(false);
     }
   };
   const handleNfcAuth = async (tagUid: string) => {
+    setIsVerifying(true);
     try {
       if (!isDemo) {
         const response = await fetch('/api/auth/nfc', {
@@ -221,6 +227,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     } catch (error) {
       sounds.playTapSound();
       setErrorMessage(error instanceof Error ? error.message : 'Autentikasi NFC gagal.');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -316,26 +324,33 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               {/* PIN Indicator Dots */}
               <div className="clay-panel p-4 flex flex-col items-center justify-center space-y-2">
                 <span className="text-[11px] font-black uppercase tracking-wider text-slate-500">
-                  Masukkan PIN Keamanan (4–8 Digit)
+                  {isVerifying ? 'Memverifikasi Akses...' : 'Masukkan PIN Keamanan (4–8 Digit)'}
                 </span>
 
-                <div className="flex items-center gap-3 py-1">
-                  {Array.from({ length: Math.max(4, pin.length) }).map((_, idx) => {
-                    const isFilled = pin.length > idx;
-                    return (
-                      <div
-                        key={idx}
-                        className={`w-6 h-6 rounded-full transition-all duration-150 flex items-center justify-center ${
-                          isFilled
-                            ? 'clay-btn-emerald scale-110'
-                            : 'clay-well bg-slate-200/90'
-                        }`}
-                      >
-                        {isFilled && <div className="w-2.5 h-2.5 bg-white rounded-full" />}
-                      </div>
-                    );
-                  })}
-                </div>
+                {isVerifying ? (
+                  <div className="flex items-center gap-2 py-1 text-emerald-700 font-bold text-sm">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>Memverifikasi PIN...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3 py-1">
+                    {Array.from({ length: Math.max(4, pin.length) }).map((_, idx) => {
+                      const isFilled = pin.length > idx;
+                      return (
+                        <div
+                          key={idx}
+                          className={`w-6 h-6 rounded-full transition-all duration-150 flex items-center justify-center ${
+                            isFilled
+                              ? 'clay-btn-emerald scale-110'
+                              : 'clay-well bg-slate-200/90'
+                          }`}
+                        >
+                          {isFilled && <div className="w-2.5 h-2.5 bg-white rounded-full" />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Tactile Keypad 3x4 */}
@@ -387,9 +402,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     type="button"
                     onClick={() => verifyEnteredPin(pin)}
                     disabled={isPinLocked}
-                    className="w-full min-h-[44px] clay-btn-emerald text-white text-xs font-black uppercase tracking-wider cursor-pointer"
+                    className="w-full min-h-[44px] clay-btn-emerald text-white text-xs font-black uppercase tracking-wider cursor-pointer flex items-center justify-center gap-2"
                   >
-                    Masuk dengan PIN ({pin.length} Digit)
+                    {isVerifying ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Memverifikasi...</span>
+                      </>
+                    ) : (
+                      <span>Masuk dengan PIN ({pin.length} Digit)</span>
+                    )}
                   </button>
                 </div>
               )}

@@ -29,6 +29,7 @@ interface OwnerDashboardViewProps {
   onSwitchToFinance: () => void;
   onRestockMaterial: (materialId: string, amount: number) => void;
   onResetData: () => void;
+  isRefreshing?: boolean;
   onLockScreen: () => void;
   autoLockMinutes?: number;
   onUpdateAutoLockMinutes?: (minutes: number) => void;
@@ -46,6 +47,7 @@ export const OwnerDashboardView: React.FC<OwnerDashboardViewProps> = ({
   onSwitchToFinance,
   onRestockMaterial,
   onResetData,
+  isRefreshing = false,
   onLockScreen,
   autoLockMinutes = 5,
   onUpdateAutoLockMinutes,
@@ -120,11 +122,14 @@ export const OwnerDashboardView: React.FC<OwnerDashboardViewProps> = ({
           <button
             type="button"
             onClick={onResetData}
-            className="min-h-[42px] px-3 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer clay-btn-neutral text-slate-700 hover:text-emerald-700"
+            disabled={isRefreshing}
+            className={`min-h-[42px] px-3 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer clay-btn-neutral text-slate-700 hover:text-emerald-700 ${
+              isRefreshing ? 'opacity-70 cursor-wait' : ''
+            }`}
             title="Refresh Data & Sinkronisasi API"
           >
-            <RefreshCw className="w-4 h-4" />
-            <span className="hidden lg:inline">Refresh Data</span>
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-emerald-700' : ''}`} />
+            <span className="hidden lg:inline">{isRefreshing ? 'Menyinkronkan...' : 'Refresh Data'}</span>
           </button>
 
           <button

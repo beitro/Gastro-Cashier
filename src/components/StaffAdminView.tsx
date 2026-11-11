@@ -173,6 +173,11 @@ export const StaffAdminView: React.FC<StaffAdminViewProps> = ({
 
     setSubmitting(true);
     try {
+      const localList = getLocalAccounts();
+      if (localList.some((acc) => acc.pin === pin)) {
+        throw new Error('PIN ini sudah digunakan oleh akun lain. Gunakan PIN lain yang unik.');
+      }
+
       if (getApiToken()) {
         await createAdminStaff({
           displayName,
@@ -194,10 +199,6 @@ export const StaffAdminView: React.FC<StaffAdminViewProps> = ({
         }
         await load();
       } else {
-        const localList = getLocalAccounts();
-        if (localList.some((acc) => acc.pin === pin)) {
-          throw new Error('PIN tersebut sudah digunakan oleh karyawan lain.');
-        }
         if (onCreateLocalStaff) {
           onCreateLocalStaff({
             displayName,
@@ -251,6 +252,16 @@ export const StaffAdminView: React.FC<StaffAdminViewProps> = ({
 
     setSubmitting(true);
     try {
+      const localList = getLocalAccounts();
+      const existingAccount = localList.find((acc) => acc.pin === cleanPin);
+      if (existingAccount) {
+        if (existingAccount.id === editingPinStaff.id) {
+          throw new Error('PIN baru tidak boleh sama dengan PIN saat ini.');
+        } else {
+          throw new Error('PIN ini sudah digunakan oleh akun lain. Gunakan PIN lain yang unik.');
+        }
+      }
+
       if (getApiToken()) {
         await updateAdminStaffPin(editingPinStaff.id, cleanPin);
         if (onUpdateLocalStaffPin) {
@@ -258,10 +269,6 @@ export const StaffAdminView: React.FC<StaffAdminViewProps> = ({
         }
         await load();
       } else {
-        const localList = getLocalAccounts();
-        if (localList.some((acc) => acc.id !== editingPinStaff.id && acc.pin === cleanPin)) {
-          throw new Error('PIN tersebut sudah digunakan oleh akun karyawan lain.');
-        }
         if (onUpdateLocalStaffPin) {
           onUpdateLocalStaffPin(editingPinStaff.id, cleanPin);
         } else {
