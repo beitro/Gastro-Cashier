@@ -662,6 +662,14 @@ app.get('/api/tables', authenticate, requirePosRole, asyncRoute(async (req,res) 
   res.json(rows);
 }));
 
+// Serve the Vite production build from the same origin as the API (Render preview).
+const webDistPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
+app.use(express.static(webDistPath, { index: false, fallthrough: true, maxAge: '1h' }));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(webDistPath, 'index.html'), error => { if (error) next(error); });
+});
+
 app.use((err, _req, res, _next) => {
   console.error('[api]', err.message);
   res.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Terjadi kesalahan server.' : err.message });
