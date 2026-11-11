@@ -1,0 +1,24 @@
+meta {
+  name: Create Transfer Pending
+  type: http
+  seq: 7
+}
+post {
+  url: {{baseUrl}}/api/sessions/{{sessionId}}/payments
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{cashierToken}}
+}
+body:json {
+  method: "transfer",
+  discountAmount: 0,
+  idempotencyKey: "audit-transfer-001"
+}
+script:post-response {
+  test("bank transfer stays pending until authorized confirmation", function() {
+    expect(res.body.status).to.equal("pending");
+    expect(res.body.paid_at).to.equal(null);
+  });
+}

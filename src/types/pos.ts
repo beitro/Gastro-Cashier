@@ -114,7 +114,7 @@ export interface Transaction {
   totalAmount: number;
   // Settlement info
   paidAt?: string;
-  paymentMethod?: 'cash' | 'qris' | 'card' | 'split';
+  paymentMethod?: 'cash' | 'qris' | 'card' | 'transfer' | 'split';
   cashGiven?: number;
   changeAmount?: number;
   cashierName?: string;
@@ -144,7 +144,7 @@ export interface PrintTicket {
   };
 }
 
-export type UserRole = 'owner' | 'cashier' | 'finance';
+export type UserRole = 'owner' | 'manager' | 'cashier' | 'finance';
 
 export interface StaffAccount {
   id: string;

@@ -54,7 +54,7 @@ The API-backed POS also persists kitchen/bar progress and waiter handoff:
 - The order modal uses the authenticated API menu catalog.
 - Modifier selections are rejected until the backend persists and validates modifier prices.
 - Payment First remains disabled until the backend supports payment-first/partial-payment sessions.
-- Inventory stock is not yet supplied/enforced by the menu API; the current test catalog is not a stock-control implementation.
+- Menu-level inventory is enforced by migration `006_menu_stock_and_payment_settlement.sql`. Missing `menu_stock` rows are unlimited stock; rows with `track_stock=true` enforce available quantity atomically.
 - The E2E command requires the development API's HMAC/runtime-role configuration. Do not bypass those startup checks to run the test.
 
 
@@ -112,3 +112,36 @@ the resulting connection string only in the Vercel **Preview** environment as
 identical value into `app_private.rls_context_keys` using
 `scripts/db-provision-rls-context-key.mjs`. Never commit, log, or paste either
 secret into GitHub source. Keep production environment variables untouched.
+
+
+## Menu stock and settlement E2E
+
+The dedicated transaction audit runner exercises:
+- Two separate table sessions competing for a menu SKU with stock = 1; exactly one order must be accepted and the other must receive HTTP 409.
+- Replaying the winning order idempotency key must return the original batch without deducting stock twice.
+- Manager/Owner cancellation restores stock once only when the original sale movement exists.
+- Cash settles immediately. QRIS, card and transfer remain pending until a Manager/Owner/Finance settlement confirmation supplies a provider reference.
+- Payment idempotency replay returns the original payment, and settled sessions release their tables.
+
+Run against the isolated Preview API only:
+
+```sh
+POS_E2E_API_URL='(development preview URL)' \
+POS_E2E_PIN='(development Owner PIN)' \
+npm run test:e2e:inventory
+```
+
+This E2E uses an Owner credential for the approval actions. The endpoint also authorizes Manager; test the Manager role separately with a real Manager account. Provider references in this test are simulated strings: no live QRIS, card-acquirer, or bank-transfer provider/webhook is configured.
+
+The Bruno collection is in `bruno/Gastro-Cashier`. Import that folder in Bruno, configure the Development environment, log in, then run the stock, order, cancellation and payment requests. For a concurrency test, open two sessions on separate tables, set the same menu stock to 1, and submit the same menu item from two independent request tabs at the same time using different idempotency keys.
+
+
+## Pending payment void and retry
+
+Authorized Manager/Owner/Finance can void a pending payment with a mandatory reason:
+- `PATCH /api/payments/:paymentId/void`
+- A successful void changes payment status to `voided`, records the reason in settlement metadata and audit log, and reopens the dining session.
+- A settled payment cannot be voided through this endpoint.
+- After voiding, Manager/Owner may cancel an eligible order item and restore its stock, or cashier may create a replacement payment.
+
+The automated inventory E2E also verifies transfer pending → void → replacement transfer pending → confirmed settlement.

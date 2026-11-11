@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: gastro-cashier-preview
+    runtime: node
+    plan: free
+    region: singapore
+    branch: feat/menu-stock-transaction-audit
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: NODE_ENV
+        value: production
+      - key: PGSSL
+        value: "true"
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: RLS_CONTEXT_HMAC_SECRET
+        generateValue: true
+      - key: PGPOOL_MAX
+        value: "5"

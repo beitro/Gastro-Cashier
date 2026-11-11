@@ -1,0 +1,23 @@
+meta {
+  name: Void Pending Payment
+  type: http
+  seq: 6
+}
+patch {
+  url: {{baseUrl}}/api/payments/{{paymentId}}/void
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{approverToken}}
+}
+body:json {
+  reason: "Provider timeout or payment evidence not received; verified by Finance"
+}
+script:post-response {
+  test("pending payment is voided and session reopens", function() {
+    expect(res.body.ok).to.equal(true);
+    expect(res.body.payment.status).to.equal("voided");
+    expect(res.body.sessionReopened).to.equal(true);
+  });
+}

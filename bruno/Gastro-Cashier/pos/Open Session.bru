@@ -1,0 +1,20 @@
+meta {
+  name: Open Session
+  type: http
+  seq: 2
+}
+post {
+  url: {{baseUrl}}/api/sessions
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{cashierToken}}
+}
+body:json {
+  tableId: "{{tableId}}",
+  guestCount: 2
+}
+script:post-response {
+  bru.setEnvVar("sessionId", res.body.id);
+}

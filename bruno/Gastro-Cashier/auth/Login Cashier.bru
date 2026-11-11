@@ -1,0 +1,20 @@
+meta {
+  name: Login Cashier
+  type: http
+  seq: 1
+}
+post {
+  url: {{baseUrl}}/api/auth/pin
+  body: json
+  auth: none
+}
+body:json {
+  pin: "{{cashierPin}}"
+}
+script:post-response {
+  bru.setEnvVar("cashierToken", res.body.token);
+  test("cashier login returns bearer token", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.token).to.be.a("string");
+  });
+}

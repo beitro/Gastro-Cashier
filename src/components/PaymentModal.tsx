@@ -9,6 +9,7 @@ import {
   Receipt,
   Percent,
   AlertCircle,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { sounds } from '../utils/soundEffects';
 
@@ -19,8 +20,9 @@ interface PaymentModalProps {
   onCompleteSettlement: (params: {
     transactionId: string;
     tableId: string;
-    paymentMethod: 'cash' | 'qris' | 'card';
+    paymentMethod: 'cash' | 'qris' | 'card' | 'transfer';
     cashGiven?: number;
+    cardBank?: string;
     changeAmount?: number;
     discountAmount: number;
   }) => void;
@@ -32,7 +34,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   onClose,
   onCompleteSettlement,
 }) => {
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris' | 'card'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris' | 'card' | 'transfer'>('cash');
   const [discountType, setDiscountType] = useState<'none' | 'member10' | 'promo20k'>('none');
   const [cashGiven, setCashGiven] = useState<number>(0);
   const [selectedBank, setSelectedBank] = useState<string>('BCA EDC');
@@ -75,6 +77,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       paymentMethod,
       cashGiven: paymentMethod === 'cash' ? cashGiven : finalTotal,
       changeAmount: paymentMethod === 'cash' ? changeAmount : 0,
+      cardBank: paymentMethod === 'card' ? selectedBank : undefined,
       discountAmount,
     });
   };
@@ -234,7 +237,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             </h4>
 
             {/* Method Switcher Clay Touch Buttons */}
-            <div className="grid grid-cols-3 gap-3 mb-5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
               <button
                 type="button"
                 onClick={() => setPaymentMethod('cash')}
@@ -266,6 +269,16 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               >
                 <CreditCard className="w-6 h-6" />
                 <span className="whitespace-nowrap">Debit / Kartu</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('transfer')}
+                className={`min-h-[76px] py-3.5 px-3 text-xs sm:text-sm font-extrabold flex flex-col items-center justify-center gap-2 cursor-pointer ${
+                  paymentMethod === 'transfer' ? 'clay-btn-indigo' : 'clay-btn-neutral'
+                }`}
+              >
+                <ArrowLeftRight className="w-6 h-6" />
+                <span className="whitespace-nowrap">Transfer Bank</span>
               </button>
             </div>
 
@@ -357,10 +370,21 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                   <p className="font-black font-mono tabular-nums text-emerald-800 text-xl">
                     {formatRupiah(finalTotal)}
                   </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Scan melalui GoPay, OVO, Dana, BCA Mobile, Livin, atau m-Banking lainnya.
+                  <p className="text-xs text-amber-700 mt-2 font-bold">
+                    QR di layar ini masih kode demonstrasi, bukan QRIS pembayaran valid. Jangan anggap lunas. Catatan pembayaran akan berstatus PENDING sampai Finance/Manager memverifikasi transaksi dari kanal pembayaran resmi.
                   </p>
                 </div>
+              </div>
+            )}
+
+            {/* METHOD: BANK TRANSFER */}
+            {paymentMethod === 'transfer' && (
+              <div className="clay-card p-5 space-y-3.5">
+                <span className="text-sm font-extrabold text-slate-700 block">Pembayaran Transfer Bank</span>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Catat pembayaran sebagai PENDING. Gunakan rekening resmi outlet yang diinformasikan oleh Finance, lalu minta bukti transfer. Meja tidak ditutup dan struk lunas tidak diterbitkan sebelum mutasi/referensi diverifikasi.
+                </p>
+                <p className="text-xs text-amber-700 font-bold">Nomor rekening belum dikonfigurasi di aplikasi ini. Jangan transfer ke rekening yang tidak terverifikasi.</p>
               </div>
             )}
 
@@ -404,10 +428,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               }`}
             >
               <Receipt className="w-5 h-5 shrink-0" />
-              <span>SELESAIKAN PEMBAYARAN & TUTUP MEJA</span>
+              <span>{paymentMethod === 'cash' ? 'SELESAIKAN PEMBAYARAN & TUTUP MEJA' : 'CATAT PEMBAYARAN PENDING'}</span>
             </button>
             <p className="text-xs text-center text-slate-500 font-semibold">
-              Struk resmi customer dicetak, omzet tercatat, dan Meja {table.tableNumber} kembali HIJAU PEKAT (Kosong).
+              {paymentMethod === 'cash' ? 'Pembayaran tunai dilunasi dan meja ditutup.' : 'Meja tetap aktif sampai Finance/Manager mengonfirmasi pembayaran. Struk lunas belum diterbitkan.'}
             </p>
           </div>
         </div>

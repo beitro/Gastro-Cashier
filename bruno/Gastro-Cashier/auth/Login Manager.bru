@@ -1,0 +1,20 @@
+meta {
+  name: Login Manager or Owner
+  type: http
+  seq: 2
+}
+post {
+  url: {{baseUrl}}/api/auth/pin
+  body: json
+  auth: none
+}
+body:json {
+  pin: "{{approverPin}}"
+}
+script:post-response {
+  bru.setEnvVar("approverToken", res.body.token);
+  test("manager or owner login returns bearer token", function() {
+    expect(res.status).to.equal(200);
+    expect(["manager", "owner"]).to.include(res.body.staff.role);
+  });
+}

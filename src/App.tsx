@@ -23,7 +23,7 @@ import {
 } from './utils/posCalculations';
 import { assertTableAccess, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
-import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, updateApiOrderItem, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock, mapApiMenuToMenuItems } from './services/posApi';
+import { getApiToken, loadPosSnapshot, openApiSession, submitApiOrder, updateApiOrderItem, settleApiSession, mapPaymentToTransaction, mapApiMenuToStock, mapApiMenuToMenuItems, cancelApiOrderItem } from './services/posApi';
 
 import { Navbar, NavTabId } from './components/Navbar';
 import { FloorPlanGrid } from './components/FloorPlanGrid';
@@ -731,7 +731,7 @@ export default function App() {
   // FLOW 2 (NEW): PAYMENT FIRST (LANGSUNG BAYAR DI DEPAN) — SETTLE IMMEDIATELY + PRINT RECEIPT & KITCHEN/BAR/CHECKER
   const handleSubmitPaymentFirstOrder = (_params: {
     table: Table; guestCount: number; waiterName: string; newItems: OrderItem[]; batchNumber: number;
-    paymentMethod: 'cash' | 'qris' | 'card'; cashGiven: number; changeAmount: number; discountAmount: number; keepTableAvailable?: boolean;
+    paymentMethod: 'cash' | 'qris' | 'card' | 'transfer'; cashGiven: number; changeAmount: number; discountAmount: number; keepTableAvailable?: boolean;
   }) => {
     window.alert('Payment First sementara dinonaktifkan sampai backend mendukung pembayaran parsial dan sesi layanan setelah pelunasan. Gunakan Payment Last agar pembayaran tercatat atomik di database.');
   };
@@ -799,9 +799,9 @@ export default function App() {
     setCancellationRequests((prev) => prev.filter((request) => request.id !== requestId));
   };
 
-  const handleApproveCancellation = (requestId: string) => {
-    if (!canApproveCancellation(currentStaff)) {
-      window.alert('Hanya Outlet Manager (role Owner pada demo) yang dapat menyetujui pengembalian stok.');
+  const handleApproveCancellation = async (requestId: string) => {
+    if (!canApproveCancellation(currentStaff) || !getApiToken()) {
+      window.alert('Hanya Manager atau Owner dengan sesi API aktif yang dapat menyetujui pembatalan.');
       return;
     }
     const request = cancellationRequests.find((entry) => entry.id === requestId);
@@ -813,17 +813,13 @@ export default function App() {
       setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
       return;
     }
-    const nextStock = { ...menuStockRef.current, [request.menuItemId]: (menuStockRef.current[request.menuItemId] || 0) + item.quantity };
-    menuStockRef.current = nextStock;
-    setMenuStock(nextStock);
-    const remainingItems = tx.allCurrentItems.filter((entry) => entry.id !== item.id);
-    const remainingBatches = tx.batches.map((batch) => ({ ...batch, items: batch.items.filter((entry) => entry.id !== item.id) })).filter((batch) => batch.items.length > 0);
-    const totals = calculateOrderTotals(remainingItems, tx.discountAmount);
-    setActiveTransactions((prev) => ({
-      ...prev,
-      [tx.id]: { ...tx, allCurrentItems: remainingItems, batches: remainingBatches, subtotal: totals.subtotal, serviceChargeAmount: totals.serviceChargeAmount, taxAmount: totals.taxAmount, totalAmount: totals.totalAmount },
-    }));
-    setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
+    try {
+      await cancelApiOrderItem(item.id);
+      await refreshApiSnapshot();
+      setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
+    } catch (error) {
+      window.alert('Pembatalan ditolak database; stok tidak diubah di perangkat ini. ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   };
 
   // RestoSync Feature - Quick Restock Material
@@ -885,16 +881,22 @@ export default function App() {
   const handleCompleteSettlement = async (params: {
     transactionId: string;
     tableId: string;
-    paymentMethod: 'cash' | 'qris' | 'card';
+    paymentMethod: 'cash' | 'qris' | 'card' | 'transfer';
     cashGiven?: number;
+    cardBank?: string;
     changeAmount?: number;
     discountAmount: number;
   }) => {
-    const { transactionId, tableId, paymentMethod, cashGiven, discountAmount } = params;
+    const { transactionId, tableId, paymentMethod, cashGiven, cardBank, discountAmount } = params;
     const currentTx = activeTransactions[transactionId];
     if (!currentTx || !canOperatePOS(currentStaff) || !getApiToken()) return;
     try {
-      const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven);
+      const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven, cardBank);
+      if (payment.status !== 'settled') {
+        await refreshApiSnapshot();
+        window.alert('Pembayaran tercatat sebagai PENDING. Meja belum ditutup dan struk lunas belum diterbitkan. Manager/Finance harus mengonfirmasi pembayaran melalui endpoint settlement setelah verifikasi bukti.');
+        return;
+      }
       const completedTx = mapPaymentToTransaction(currentTx, payment);
       const receiptTicket = generatePrintTickets({
         transaction: completedTx,

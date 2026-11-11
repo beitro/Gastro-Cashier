@@ -40,12 +40,20 @@ async function setRlsContext(client, claims) {
   );
   await client.query("SELECT set_config('app.context_token',$1,true)", [signRlsContext({ ...claims, txid: tx.rows[0].txid })]);
 }
-const normalizeRole = (role) => role === 'owner' ? 'owner' : role === 'finance' ? 'finance' : role === 'cashier' ? 'cashier' : null;
+const normalizeRole = (role) => ['owner','manager','finance','cashier'].includes(role) ? role : null;
 function requireOwner(req,res,next) { if (!req.auth || req.auth.role_code !== 'owner') return res.status(403).json({error:'Hanya Owner yang dapat mengelola staff.'}); next(); }
 function requirePosRole(req, res, next) {
-  if (!req.auth || !['owner','cashier'].includes(normalizeRole(req.auth.role_code))) {
+  if (!req.auth || !['owner','manager','cashier'].includes(normalizeRole(req.auth.role_code))) {
     return res.status(403).json({ error:'Role Anda tidak memiliki izin untuk operasi POS.' });
   }
+  next();
+}
+function requireManagerOrOwner(req,res,next) {
+  if (!req.auth || !['owner','manager'].includes(normalizeRole(req.auth.role_code))) return res.status(403).json({error:'Pembatalan hanya dapat dilakukan Manager atau Owner.'});
+  next();
+}
+function requireSettlementRole(req,res,next) {
+  if (!req.auth || !['owner','manager','finance'].includes(normalizeRole(req.auth.role_code))) return res.status(403).json({error:'Konfirmasi pembayaran hanya dapat dilakukan Manager, Owner, atau Finance.'});
   next();
 }
 
@@ -247,7 +255,7 @@ app.use('/api/admin/staff', (req,res,next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   return res.status(423).json({ error:'Administrasi staff sementara read-only selama emergency release POS.', code:'STAFF_ADMIN_READ_ONLY' });
 });
-const ADMIN_ROLES=['owner','cashier','finance'];
+const ADMIN_ROLES=['owner','manager','cashier','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
@@ -316,12 +324,38 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
   res.json({ok:true,credentialsUpdated:true,sessionsRevoked:true});
 }));
 app.get('/api/menu', authenticate, requirePosRole, asyncRoute(async (req,res) => {
-  const rows = await scoped(req, c => c.query(`SELECT m.id,m.sku,m.name,m.description,m.destination,m.price,m.cost_price,m.image_url,m.category_id,c.name AS category_name
+  const rows = await scoped(req, c => c.query(`SELECT m.id,m.sku,m.name,m.description,m.destination,m.price,m.cost_price,m.image_url,m.category_id,c.name AS category_name,
+      COALESCE(ms.track_stock,false) AS track_stock,ms.quantity AS stock_quantity
     FROM menu_items m LEFT JOIN menu_categories c ON c.tenant_id=m.tenant_id AND c.id=m.category_id
+    LEFT JOIN menu_stock ms ON ms.tenant_id=m.tenant_id AND ms.outlet_id=$2 AND ms.menu_item_id=m.id
     WHERE m.tenant_id=$1 AND (m.outlet_id IS NULL OR m.outlet_id=$2) AND m.is_available=true
     ORDER BY c.sort_order NULLS LAST,m.sort_order,m.name`,[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
+app.put('/api/menu/:menuItemId/stock', authenticate, requireManagerOrOwner, asyncRoute(async(req,res)=>{
+  const quantity=req.body?.quantity,trackStock=req.body?.trackStock!==false;
+  if(!Number.isInteger(quantity)||quantity<0||quantity>1000000||typeof req.body?.trackStock!=='boolean') return res.status(400).json({error:'quantity integer 0–1.000.000 dan trackStock boolean wajib valid.'});
+  const result=await scoped(req,async c=>{
+    const menu=await c.query('SELECT id FROM menu_items WHERE tenant_id=$1 AND (outlet_id IS NULL OR outlet_id=$2) AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId]);
+    if(!menu.rowCount) return {status:404,body:{error:'Menu tidak ditemukan di outlet ini.'}};
+    const old=await c.query('SELECT quantity,track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId]);
+    const nextQuantity=trackStock?quantity:0;
+    const priorQuantity=old.rowCount&&old.rows[0].track_stock?Number(old.rows[0].quantity):0;
+    const saved=(await c.query(`INSERT INTO menu_stock(tenant_id,outlet_id,menu_item_id,quantity,track_stock,updated_at,updated_by_staff_id)
+      VALUES($1,$2,$3,$4,$5,now(),$6)
+      ON CONFLICT(tenant_id,outlet_id,menu_item_id) DO UPDATE SET quantity=EXCLUDED.quantity,track_stock=EXCLUDED.track_stock,updated_at=now(),updated_by_staff_id=EXCLUDED.updated_by_staff_id
+      RETURNING *`,[req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId,nextQuantity,trackStock,req.auth.staff_id])).rows[0];
+    const delta=nextQuantity-priorQuantity;
+    if(delta!==0) await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
+      VALUES($1,$2,$3,$4,$5,'stock_adjustment',$6,$7,$8)`,
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.menuItemId,old.rowCount?'adjustment':'opening',delta,randomUUID(),req.body?.note?String(req.body.note).slice(0,500):'Manager stock adjustment',req.auth.staff_id]);
+    await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'menu_stock.adjusted','menu_stock',$4,$5::jsonb)",
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.menuItemId,JSON.stringify({quantity:saved.quantity,trackStock:saved.track_stock,delta})]);
+    return {status:200,body:saved};
+  });
+  res.status(result.status).json(result.body);
+}));
+
 app.get('/api/sessions', authenticate, requirePosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT s.*,t.table_code,t.display_name AS table_name
     FROM dining_sessions s JOIN dining_tables t ON t.tenant_id=s.tenant_id AND t.outlet_id=s.outlet_id AND t.id=s.table_id
@@ -390,17 +424,40 @@ app.patch('/api/sessions/:sessionId/orders/:itemId', authenticate, requirePosRol
   res.json(updated);
 }));
 app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncRoute(async (req,res) => {
-  const { items, note } = req.body || {};
+  const { items, note, idempotencyKey } = req.body || {};
   if (!Array.isArray(items) || !items.length || items.length>100) return res.status(400).json({error:'items harus berisi 1–100 item.'});
+  if (typeof idempotencyKey!=='string' || idempotencyKey.length<8 || idempotencyKey.length>128) return res.status(400).json({error:'idempotencyKey 8–128 karakter wajib diisi.'});
   for (const item of items) if (!item.menuItemId || !Number.isInteger(item.quantity) || item.quantity<1 || item.quantity>999) return res.status(400).json({error:'Setiap item memerlukan menuItemId dan quantity 1–999.'});
   const result = await scoped(req, async c => {
+    const idemScope = 'order:'+req.auth.tenant_id+':'+req.auth.outlet_id+':'+idempotencyKey;
+    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[idemScope]);
+    const existing = await c.query('SELECT operation,response_status,response_body,expires_at FROM idempotency_keys WHERE tenant_id=$1 AND outlet_id=$2 AND key=$3',[req.auth.tenant_id,req.auth.outlet_id,idempotencyKey]);
+    if (existing.rowCount && new Date(existing.rows[0].expires_at)>new Date()) {
+      if (existing.rows[0].operation!=='create_order') return {status:409,body:{error:'Idempotency key sudah digunakan untuk operasi berbeda.'}};
+      if (existing.rows[0].response_body) {
+        const priorSessionId=existing.rows[0].response_body?.batch?.session_id;
+        if (priorSessionId!==req.params.sessionId) return {status:409,body:{error:'Idempotency key sudah terikat ke sesi meja lain.'}};
+        return {status:200,body:existing.rows[0].response_body};
+      }
+      return {status:409,body:{error:'Permintaan dengan idempotency key ini sedang diproses.'}};
+    }
     const session = await c.query("SELECT id FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status='active' FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     if (!session.rowCount) return {status:404,body:{error:'Sesi meja tidak aktif atau tidak ditemukan.'}};
-    const catalog = await c.query(`SELECT id,name,destination,price,c.name AS category_name FROM menu_items m LEFT JOIN menu_categories c ON c.tenant_id=m.tenant_id AND c.id=m.category_id
+    const menuIds=[...new Set(items.map(i=>i.menuItemId))];
+    const catalog = await c.query(`SELECT m.id,m.name,m.destination,m.price,c.name AS category_name
+      FROM menu_items m LEFT JOIN menu_categories c ON c.tenant_id=m.tenant_id AND c.id=m.category_id
       WHERE m.tenant_id=$1 AND (m.outlet_id IS NULL OR m.outlet_id=$2) AND m.is_available AND m.id=ANY($3::uuid[])`,
-      [req.auth.tenant_id,req.auth.outlet_id,[...new Set(items.map(i=>i.menuItemId))]]);
-    if (catalog.rowCount !== new Set(items.map(i=>i.menuItemId)).size) return {status:400,body:{error:'Satu atau lebih menu tidak tersedia.'}};
+      [req.auth.tenant_id,req.auth.outlet_id,menuIds]);
+    if (catalog.rowCount !== menuIds.length) return {status:400,body:{error:'Satu atau lebih menu tidak tersedia.'}};
     const byId=new Map(catalog.rows.map(x=>[x.id,x]));
+    const required=new Map();
+    for (const item of items) required.set(item.menuItemId,(required.get(item.menuItemId)||0)+item.quantity);
+    const stockRows=await c.query('SELECT menu_item_id,quantity,track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=ANY($3::uuid[]) ORDER BY menu_item_id FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,menuIds]);
+    const stockByMenu=new Map(stockRows.rows.map(x=>[x.menu_item_id,x]));
+    for (const [menuId,qty] of required) {
+      const stock=stockByMenu.get(menuId);
+      if (stock?.track_stock && Number(stock.quantity)<qty) return {status:409,body:{error:'Stok menu tidak mencukupi.',code:'INSUFFICIENT_MENU_STOCK',menuItemId:menuId,available:Number(stock.quantity),requested:qty}};
+    }
     const next = await c.query('SELECT COALESCE(MAX(batch_number),0)+1 AS n FROM order_batches WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     const batch = (await c.query(`INSERT INTO order_batches(tenant_id,outlet_id,session_id,batch_number,created_by_staff_id,status,note,submitted_at)
       VALUES($1,$2,$3,$4,$5,'submitted',$6,now()) RETURNING *`,[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,next.rows[0].n,req.auth.staff_id,note||null])).rows[0];
@@ -412,9 +469,22 @@ app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncR
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$12) RETURNING *`,
         [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,batch.id,m.id,m.name,m.category_name,m.destination,unit,qty,line,item.notes||null]);
       created.push(row.rows[0]);
+      const stock=stockByMenu.get(m.id);
+      if (stock?.track_stock) {
+        await c.query('UPDATE menu_stock SET quantity=quantity-$1,updated_at=now(),updated_by_staff_id=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND menu_item_id=$5',[qty,req.auth.staff_id,req.auth.tenant_id,req.auth.outlet_id,m.id]);
+        await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,order_item_id,movement_type,quantity_delta,reference_type,reference_id,created_by_staff_id)
+          VALUES($1,$2,$3,$4,'sale',$5,'order_item',$4,$6)`,
+          [req.auth.tenant_id,req.auth.outlet_id,m.id,row.rows[0].id,-qty,req.auth.staff_id]);
+      }
     }
     await c.query('UPDATE dining_sessions SET version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
-    return {status:201,body:{batch,items:created}};
+    const body={batch,items:created};
+    await c.query(`INSERT INTO idempotency_keys(tenant_id,outlet_id,key,operation,response_status,response_body,expires_at)
+      VALUES($1,$2,$3,'create_order',201,$4::jsonb,now()+interval '24 hours')
+      ON CONFLICT(tenant_id,outlet_id,key) DO UPDATE SET operation=EXCLUDED.operation,response_status=EXCLUDED.response_status,response_body=EXCLUDED.response_body,created_at=now(),expires_at=EXCLUDED.expires_at
+      WHERE idempotency_keys.expires_at<=now()`,
+      [req.auth.tenant_id,req.auth.outlet_id,idempotencyKey,JSON.stringify(body)]);
+    return {status:201,body};
   });
   res.status(result.status).json(result.body);
 }));
@@ -423,40 +493,158 @@ app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyn
   const { method, discountAmount=0, cashReceived, idempotencyKey, cardBank } = req.body || {};
   if (!['cash','qris','card','transfer','other'].includes(method) || typeof idempotencyKey!=='string' || idempotencyKey.length<8 || idempotencyKey.length>128 || !Number.isFinite(Number(discountAmount)) || Number(discountAmount)<0) return res.status(400).json({error:'Metode, idempotencyKey (8–128 karakter), atau diskon tidak valid.'});
   const result=await scoped(req,async c=>{
+    const idemScope='payment:'+req.auth.tenant_id+':'+req.auth.outlet_id+':'+idempotencyKey;
+    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[idemScope]);
+    const session=await c.query('SELECT * FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    if(!session.rowCount) return {status:404,body:{error:'Sesi meja tidak ditemukan.'}};
     const existing=await c.query('SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND idempotency_key=$3',[req.auth.tenant_id,req.auth.outlet_id,idempotencyKey]);
     if(existing.rowCount) {
       const prior=existing.rows[0];
-      const sameRequest = prior.session_id === req.params.sessionId &&
-        prior.method === method && Number(prior.discount_amount) === Number(discountAmount) &&
-        (method !== 'cash' || Number(prior.cash_received) === Number(cashReceived)) &&
-        (prior.card_bank || null) === (cardBank || null);
-      if (!sameRequest) return {status:409,body:{error:'Idempotency key sudah digunakan untuk payload pembayaran yang berbeda.'}};
+      const sameRequest=prior.session_id===req.params.sessionId && prior.method===method &&
+        Number(prior.discount_amount)===Number(discountAmount) &&
+        (method!=='cash'||Number(prior.cash_received)===Number(cashReceived)) &&
+        (prior.card_bank||null)===(cardBank||null);
+      if(!sameRequest) return {status:409,body:{error:'Idempotency key sudah digunakan untuk payload pembayaran yang berbeda.'}};
+      if(prior.status==='voided') return {status:409,body:{error:'Pembayaran dengan idempotency key ini sudah di-void. Gunakan key baru untuk percobaan pembayaran berikutnya.',code:'PAYMENT_KEY_ALREADY_VOIDED'}};
       return {status:200,body:prior};
     }
-    const session=await c.query("SELECT * FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 AND status IN ('active','billing') FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
-    if(!session.rowCount) return {status:404,body:{error:'Sesi meja tidak ditemukan atau sudah ditutup.'}};
+    if(!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Sesi sudah ditutup dan tidak menerima pembayaran baru.'}};
+    const pending=await c.query("SELECT id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND status='pending' FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    if(pending.rowCount) return {status:409,body:{error:'Sudah ada pembayaran pending untuk sesi ini. Selesaikan atau void pembayaran tersebut terlebih dahulu.',pendingPaymentId:pending.rows[0].id}};
     const items=await c.query("SELECT id,line_total FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND cooking_status<>'cancelled' ORDER BY created_at FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     if(!items.rowCount) return {status:400,body:{error:'Tidak ada item pesanan yang dapat dibayar.'}};
-    const subtotal=items.rows.reduce((sum,x)=>sum+Number(x.line_total),0), discount=Number(discountAmount);
+    const subtotal=items.rows.reduce((sum,x)=>sum+Number(x.line_total),0),discount=Number(discountAmount);
     if(discount>subtotal) return {status:400,body:{error:'Diskon melebihi subtotal.'}};
-    const service=Number((subtotal-discount)*Number(session.rows[0].service_charge_rate));
-    const tax=Number(((subtotal-discount)+service)*Number(session.rows[0].tax_rate));
+    const service=Number(((subtotal-discount)*Number(session.rows[0].service_charge_rate)).toFixed(2));
+    const tax=Number((((subtotal-discount)+service)*Number(session.rows[0].tax_rate)).toFixed(2));
     const total=Number((subtotal-discount+service+tax).toFixed(2));
     const received=method==='cash'?Number(cashReceived):total;
     if(!Number.isFinite(received)||received<total) return {status:400,body:{error:'Uang diterima tidak cukup.'}};
     const receipt='R-'+new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,14)+'-'+randomBytes(3).toString('hex').toUpperCase();
-    const payment=(await c.query(`INSERT INTO payments(tenant_id,outlet_id,session_id,receipt_number,method,card_bank,subtotal_amount,discount_amount,service_charge_amount,tax_amount,total_amount,cash_received,change_amount,cashier_staff_id,idempotency_key)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,receipt,method,cardBank||null,subtotal,discount,service,tax,total,received,received-total,req.auth.staff_id,idempotencyKey])).rows[0];
-    for(const item of items.rows) if(Number(item.line_total)>0) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5)',[req.auth.tenant_id,req.auth.outlet_id,payment.id,item.id,Number(item.line_total)]);
-    await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    const status=method==='cash'?'settled':'pending';
+    const payment=(await c.query(`INSERT INTO payments(tenant_id,outlet_id,session_id,receipt_number,status,method,card_bank,subtotal_amount,discount_amount,service_charge_amount,tax_amount,total_amount,cash_received,change_amount,cashier_staff_id,idempotency_key,paid_at,settled_at,settled_by_staff_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,CASE WHEN $5='settled' THEN now() ELSE NULL END,CASE WHEN $5='settled' THEN now() ELSE NULL END,CASE WHEN $5='settled' THEN $15 ELSE NULL END) RETURNING *`,
+      [req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId,receipt,status,method,cardBank||null,subtotal,discount,service,tax,total,received,method==='cash'?received-total:0,req.auth.staff_id,idempotencyKey])).rows[0];
+    if(status==='settled') {
+      for(const item of items.rows) if(Number(item.line_total)>0) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5)',[req.auth.tenant_id,req.auth.outlet_id,payment.id,item.id,Number(item.line_total)]);
+      await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    } else {
+      await c.query("UPDATE dining_sessions SET status='billing',version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    }
     return {status:201,body:payment};
   });
   res.status(result.status).json(result.body);
 }));
 
+app.patch('/api/order-batches/:batchId/cancel', authenticate, requireManagerOrOwner, asyncRoute(async(req,res)=>{
+  const result=await scoped(req,async c=>{
+    const batchRef=await c.query('SELECT session_id FROM order_batches WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.batchId]);
+    if(!batchRef.rowCount) return {status:404,body:{error:'Batch pesanan tidak ditemukan.'}};
+    const session=await c.query('SELECT id,status FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,batchRef.rows[0].session_id]);
+    const batch=await c.query('SELECT * FROM order_batches WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.batchId]);
+    if(batch.rows[0].status==='voided') return {status:200,body:{ok:true,alreadyCancelled:true,batchId:req.params.batchId}};
+    if(!session.rowCount||!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Sesi sudah ditutup; pembatalan batch tidak diperbolehkan.'}};
+    const pending=await c.query("SELECT id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND status='pending' LIMIT 1",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    if(pending.rowCount) return {status:409,body:{error:'Pembayaran masih pending. Void pembayaran terlebih dahulu sebelum membatalkan pesanan.',pendingPaymentId:pending.rows[0].id}};
+    const items=await c.query("SELECT id,menu_item_id,quantity FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND batch_id=$3 AND cooking_status<>'cancelled' ORDER BY menu_item_id,id FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.batchId]);
+    await c.query("UPDATE order_batches SET status='voided' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.batchId]);
+    for(const item of items.rows) {
+      await c.query("UPDATE order_items SET cooking_status='cancelled' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,item.id]);
+      const stock=await c.query('SELECT track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,item.menu_item_id]);
+      const sold=await c.query("SELECT 1 FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND reference_type='order_item' AND reference_id=$3 AND movement_type='sale'",[req.auth.tenant_id,req.auth.outlet_id,item.id]);
+      if(stock.rowCount&&stock.rows[0].track_stock&&sold.rowCount) {
+        await c.query('UPDATE menu_stock SET quantity=quantity+$1,updated_at=now(),updated_by_staff_id=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND menu_item_id=$5',[item.quantity,req.auth.staff_id,req.auth.tenant_id,req.auth.outlet_id,item.menu_item_id]);
+        await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,order_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
+          VALUES($1,$2,$3,$4,'return',$5,'order_item',$4,'Manager cancellation',$6)`,
+          [req.auth.tenant_id,req.auth.outlet_id,item.menu_item_id,item.id,item.quantity,req.auth.staff_id]);
+      }
+    }
+    await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'order_batch.cancelled','order_batch',$4,$5::jsonb)",
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.batchId,JSON.stringify({restoredItems:items.rows.length})]);
+    await c.query('UPDATE dining_sessions SET version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    return {status:200,body:{ok:true,batchId:req.params.batchId,cancelledItems:items.rows.length,stockRestored:true}};
+  });
+  res.status(result.status).json(result.body);
+}));
+
+app.patch('/api/order-items/:itemId/cancel', authenticate, requireManagerOrOwner, asyncRoute(async(req,res)=>{
+  const result=await scoped(req,async c=>{
+    const ref=await c.query('SELECT session_id FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
+    if(!ref.rowCount) return {status:404,body:{error:'Item pesanan tidak ditemukan.'}};
+    const session=await c.query('SELECT id,status FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,ref.rows[0].session_id]);
+    const item=await c.query('SELECT * FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
+    if(item.rows[0].cooking_status==='cancelled') return {status:200,body:{ok:true,alreadyCancelled:true,itemId:req.params.itemId}};
+    if(!session.rowCount||!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Sesi sudah ditutup; item tidak dapat dibatalkan.'}};
+    if(item.rows[0].is_served||['cooking','ready','handed_off'].includes(item.rows[0].cooking_status)) return {status:409,body:{error:'Item sudah diproses atau disajikan; pembatalan ditolak.'}};
+    const pending=await c.query("SELECT id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND status='pending' LIMIT 1",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    if(pending.rowCount) return {status:409,body:{error:'Pembayaran masih pending. Void pembayaran terlebih dahulu.',pendingPaymentId:pending.rows[0].id}};
+    await c.query("UPDATE order_items SET cooking_status='cancelled' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
+    let restored=false;
+    const stock=await c.query('SELECT track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
+    const sold=await c.query("SELECT 1 FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND reference_type='order_item' AND reference_id=$3 AND movement_type='sale'",[req.auth.tenant_id,req.auth.outlet_id,item.rows[0].id]);
+    if(stock.rowCount&&stock.rows[0].track_stock&&sold.rowCount) {
+      await c.query('UPDATE menu_stock SET quantity=quantity+$1,updated_at=now(),updated_by_staff_id=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND menu_item_id=$5',[item.rows[0].quantity,req.auth.staff_id,req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
+      await c.query(`INSERT INTO menu_stock_movements(tenant_id,outlet_id,menu_item_id,order_item_id,movement_type,quantity_delta,reference_type,reference_id,note,created_by_staff_id)
+        VALUES($1,$2,$3,$4,'return',$5,'order_item',$4,'Manager item cancellation',$6)`,
+        [req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id,item.rows[0].id,item.rows[0].quantity,req.auth.staff_id]);
+      restored=true;
+    }
+    await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'order_item.cancelled','order_item',$4,$5::jsonb)",
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.itemId,JSON.stringify({stockRestored:restored,quantity:item.rows[0].quantity})]);
+    await c.query('UPDATE dining_sessions SET version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    return {status:200,body:{ok:true,itemId:req.params.itemId,stockRestored:restored}};
+  });
+  res.status(result.status).json(result.body);
+}));
+
+app.patch('/api/payments/:paymentId/void', authenticate, requireSettlementRole, asyncRoute(async(req,res)=>{
+  const reason=String(req.body?.reason||'').trim();
+  if(reason.length<3||reason.length>500) return res.status(400).json({error:'Alasan void 3–500 karakter wajib diisi.'});
+  const result=await scoped(req,async c=>{
+    const ref=await c.query('SELECT session_id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId]);
+    if(!ref.rowCount) return {status:404,body:{error:'Pembayaran tidak ditemukan.'}};
+    const session=await c.query('SELECT id,status FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,ref.rows[0].session_id]);
+    const payment=await c.query('SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId]);
+    if(payment.rows[0].status==='voided') return {status:200,body:{ok:true,alreadyVoided:true,payment:payment.rows[0]}};
+    if(payment.rows[0].status!=='pending'||!session.rowCount||!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Hanya pembayaran pending pada sesi yang belum ditutup dapat di-void.'}};
+    const updated=(await c.query("UPDATE payments SET status='voided',settlement_note=$1 WHERE tenant_id=$2 AND outlet_id=$3 AND id=$4 RETURNING *",
+      [reason,req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId])).rows[0];
+    await c.query("UPDATE dining_sessions SET status='active',version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    await c.query("INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'payment.voided','payment',$4,$5::jsonb)",
+      [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,req.params.paymentId,JSON.stringify({reason,method:updated.method})]);
+    return {status:200,body:{ok:true,payment:updated,sessionReopened:true}};
+  });
+  res.status(result.status).json(result.body);
+}));
+
+app.patch('/api/payments/:paymentId/settle', authenticate, requireSettlementRole, asyncRoute(async(req,res)=>{
+  const providerReference=String(req.body?.providerReference||'').trim();
+  const settlementNote=req.body?.note?String(req.body.note).trim():null;
+  const result=await scoped(req,async c=>{
+    const paymentRef=await c.query('SELECT session_id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId]);
+    if(!paymentRef.rowCount) return {status:404,body:{error:'Pembayaran tidak ditemukan.'}};
+    const session=await c.query('SELECT id,status FROM dining_sessions WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,paymentRef.rows[0].session_id]);
+    const paymentRow=await c.query('SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId]);
+    const prior=paymentRow.rows[0];
+    if(prior.status==='settled') {
+      if(providerReference && prior.provider_reference && prior.provider_reference!==providerReference) return {status:409,body:{error:'Reference pembayaran berbeda dengan settlement yang sudah tercatat.'}};
+      return {status:200,body:prior};
+    }
+    if(prior.status!=='pending'||!session.rowCount||!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Pembayaran tidak lagi berstatus pending atau sesi sudah tidak aktif.'}};
+    if(prior.method!=='cash'&&providerReference.length<3) return {status:400,body:{error:'providerReference wajib diisi untuk konfirmasi pembayaran non-tunai.'}};
+    const updated=(await c.query(`UPDATE payments SET status='settled',paid_at=now(),settled_at=now(),settled_by_staff_id=$1,provider_reference=$2,settlement_note=$3
+      WHERE tenant_id=$4 AND outlet_id=$5 AND id=$6 RETURNING *`,
+      [req.auth.staff_id,providerReference||null,settlementNote,req.auth.tenant_id,req.auth.outlet_id,req.params.paymentId])).rows[0];
+    const items=await c.query("SELECT id,line_total FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND cooking_status<>'cancelled' ORDER BY created_at FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    for(const item of items.rows) if(Number(item.line_total)>0) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,outlet_id,payment_id,order_item_id) DO NOTHING',[req.auth.tenant_id,req.auth.outlet_id,updated.id,item.id,Number(item.line_total)]);
+    await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
+    return {status:200,body:updated};
+  });
+  res.status(result.status).json(result.body);
+}));
+
 app.patch('/api/order-items/:itemId/kitchen-status', authenticate, requirePosRole, asyncRoute(async (req,res) => {
-  const allowed=['queue','cooking','ready','handed_off','cancelled'];
+  const allowed=['queue','cooking','ready','handed_off'];
   const status=req.body?.status;
   if (!allowed.includes(status)) return res.status(400).json({error:'Status KDS tidak valid.'});
   const row=await scoped(req,c=>c.query(`UPDATE order_items SET cooking_status=$1,is_served=CASE WHEN $1='handed_off' THEN true ELSE is_served END,served_at=CASE WHEN $1='handed_off' THEN now() ELSE served_at END
@@ -473,6 +661,14 @@ app.get('/api/tables', authenticate, requirePosRole, asyncRoute(async (req,res) 
   });
   res.json(rows);
 }));
+
+// Serve the Vite production build from the same origin as the API (Render preview).
+const webDistPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
+app.use(express.static(webDistPath, { index: false, fallthrough: true, maxAge: '1h' }));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(webDistPath, 'index.html'), error => { if (error) next(error); });
+});
 
 app.use((err, _req, res, _next) => {
   console.error('[api]', err.message);

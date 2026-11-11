@@ -1,0 +1,25 @@
+meta {
+  name: Create QRIS Pending
+  type: http
+  seq: 5
+}
+post {
+  url: {{baseUrl}}/api/sessions/{{sessionId}}/payments
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{cashierToken}}
+}
+body:json {
+  method: "qris",
+  discountAmount: 0,
+  idempotencyKey: "audit-qris-001"
+}
+script:post-response {
+  bru.setEnvVar("paymentId", res.body.id);
+  test("non-cash payment remains pending until confirmation", function() {
+    expect(res.body.status).to.equal("pending");
+    expect(res.body.paid_at).to.equal(null);
+  });
+}
