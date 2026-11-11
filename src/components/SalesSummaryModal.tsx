@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Transaction } from '../types/pos';
 import { formatRupiah } from '../utils/posCalculations';
+import { downloadSalesCsv, copySalesTsvToClipboard } from '../services/googleSheets';
+import { sounds } from '../utils/soundEffects';
 import {
   X,
   Receipt,
@@ -8,6 +10,10 @@ import {
   ArrowLeft,
   BarChart3,
   FileSpreadsheet,
+  Download,
+  ExternalLink,
+  Check,
+  Sparkles,
 } from 'lucide-react';
 
 interface SalesSummaryModalProps {
@@ -23,11 +29,35 @@ export const SalesSummaryModal: React.FC<SalesSummaryModalProps> = ({
   onReprintReceipt,
   onOpenGoogleSheets,
 }) => {
+  const [csvDownloaded, setCsvDownloaded] = useState(false);
+  const [tsvCopied, setTsvCopied] = useState(false);
+
   const totalOmzetKotor = settledTransactions.reduce((acc, tx) => acc + tx.totalAmount, 0);
   const totalSubtotal = settledTransactions.reduce((acc, tx) => acc + tx.subtotal, 0);
   const totalServiceCharge = settledTransactions.reduce((acc, tx) => acc + tx.serviceChargeAmount, 0);
   const totalTaxPB1 = settledTransactions.reduce((acc, tx) => acc + tx.taxAmount, 0);
   const totalDiscounts = settledTransactions.reduce((acc, tx) => acc + tx.discountAmount, 0);
+
+  const handleDownloadCsv = () => {
+    sounds.playTapSound();
+    downloadSalesCsv(settledTransactions);
+    setCsvDownloaded(true);
+    setTimeout(() => setCsvDownloaded(false), 2500);
+  };
+
+  const handleOpenLookerStudio = async () => {
+    sounds.playTapSound();
+    try {
+      await copySalesTsvToClipboard(settledTransactions);
+      setTsvCopied(true);
+      setTimeout(() => setTsvCopied(false), 3000);
+    } catch {
+      // Ignore clipboard write error if browser blocks it
+    }
+    if (typeof window !== 'undefined') {
+      window.open('https://lookerstudio.google.com/', '_blank', 'noopener,noreferrer');
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 clay-canvas text-slate-800 flex flex-col w-screen h-screen overflow-hidden select-none">
@@ -57,33 +87,70 @@ export const SalesSummaryModal: React.FC<SalesSummaryModalProps> = ({
         </button>
       </header>
 
-      {/* Sub-Header Bar */}
+      {/* Sub-Header & Integrasi Rekap Omzet (Google Data Studio & Sheets) Action Bar */}
       <div className="px-4 sm:px-6 pt-4 flex-shrink-0">
-        <div className="clay-panel px-4 py-3 flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="clay-btn-neutral min-h-[42px] px-4 py-2 text-xs font-extrabold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Floor Plan</span>
-          </button>
-
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono tabular-nums font-extrabold text-slate-600 hidden sm:inline">
+        <div className="clay-panel px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="clay-btn-neutral min-h-[42px] px-4 py-2 text-xs font-extrabold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Floor Plan</span>
+            </button>
+            <div className="h-6 w-px bg-slate-200 hidden sm:block" />
+            <span className="text-xs font-mono tabular-nums font-extrabold text-slate-700 hidden sm:inline">
               {settledTransactions.length} Transaksi Selesai Shift Ini
             </span>
+          </div>
+
+          {/* Prominent Action Bar for Google DS & Sheets */}
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
             {onOpenGoogleSheets && (
               <button
                 type="button"
                 onClick={onOpenGoogleSheets}
-                className="clay-btn-emerald min-h-[42px] px-4 py-2 text-xs font-black flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer text-white"
-                title="Ekspor Rekap Omzet & Pajak PB1 ke Google Sheets"
+                className="clay-btn-emerald min-h-[42px] px-3.5 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer text-white shadow-xs"
+                title="Sinkronisasi Rekap Omzet & PB1 ke Google Sheets & Google Data Studio"
               >
                 <FileSpreadsheet className="w-4 h-4 stroke-[2.2]" />
-                <span>Ekspor ke Google Sheets</span>
+                <span>Sync Google Sheets &amp; Google DS</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={handleDownloadCsv}
+              className={`min-h-[42px] px-3.5 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-all ${
+                csvDownloaded ? 'clay-btn-emerald text-white' : 'clay-btn-indigo text-white'
+              }`}
+              title="Unduh file CSV format UTF-8 BOM siap import ke Google Data Studio (Looker Studio)"
+            >
+              {csvDownloaded ? (
+                <>
+                  <Check className="w-4 h-4 stroke-[2.5]" />
+                  <span>CSV Terunduh ✓</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4" />
+                  <span>Unduh CSV (Siap Google Data Studio)</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenLookerStudio}
+              className="clay-btn-dark min-h-[42px] px-3.5 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer text-white"
+              title="Salin data tabel ke clipboard & buka dashboard Looker Studio di tab baru"
+            >
+              <ExternalLink className="w-4 h-4 text-emerald-400" />
+              <span>
+                {tsvCopied ? 'Tabel Disalin! Membuka DS ↗' : 'Buka Google Data Studio (Looker Studio) ↗'}
+              </span>
+            </button>
           </div>
         </div>
       </div>

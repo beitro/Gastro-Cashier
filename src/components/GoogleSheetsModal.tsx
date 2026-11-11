@@ -13,6 +13,9 @@ import {
   exportInventoryToExistingSpreadsheet,
   extractSpreadsheetId,
   CreateSpreadsheetResult,
+  downloadSalesCsv,
+  downloadInventoryCsv,
+  copySalesTsvToClipboard,
 } from '../services/googleSheets';
 import { formatRupiah } from '../utils/posCalculations';
 import { sounds } from '../utils/soundEffects';
@@ -29,6 +32,9 @@ import {
   AlertCircle,
   Database,
   CheckCircle2,
+  Download,
+  BarChart3,
+  Sparkles,
 } from 'lucide-react';
 
 interface GoogleSheetsModalProps {
@@ -68,6 +74,11 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
   } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const [showCloudDemoFallback, setShowCloudDemoFallback] = useState(false);
+  const [csvSalesDownloaded, setCsvSalesDownloaded] = useState(false);
+  const [csvInvDownloaded, setCsvInvDownloaded] = useState(false);
+  const [copiedTsv, setCopiedTsv] = useState(false);
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -81,17 +92,45 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
   const totalPB1 = settledTransactions.reduce((acc, tx) => acc + tx.taxAmount, 0);
   const totalMaterialValue = materials.reduce((acc, m) => acc + m.currentStock * m.costPerUnit, 0);
 
+  const handleDownloadSalesCsv = () => {
+    sounds.playTapSound();
+    downloadSalesCsv(settledTransactions);
+    setCsvSalesDownloaded(true);
+    setTimeout(() => setCsvSalesDownloaded(false), 2500);
+  };
+
+  const handleDownloadInventoryCsv = () => {
+    sounds.playTapSound();
+    downloadInventoryCsv(materials);
+    setCsvInvDownloaded(true);
+    setTimeout(() => setCsvInvDownloaded(false), 2500);
+  };
+
+  const handleCopyTsv = async () => {
+    sounds.playTapSound();
+    try {
+      await copySalesTsvToClipboard(settledTransactions);
+      setCopiedTsv(true);
+      setTimeout(() => setCopiedTsv(false), 2500);
+    } catch {
+      // Ignore clipboard error
+    }
+  };
+
   // Sign in handler
   const handleSignIn = async () => {
     sounds.playTapSound();
     setIsAuthLoading(true);
     setErrorMessage(null);
+    setShowCloudDemoFallback(false);
     try {
       const { user } = await signInWithGoogle();
       setCurrentUser(user);
+      setDemoMode(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Gagal login dengan akun Google';
       setErrorMessage(msg);
+      setShowCloudDemoFallback(true);
     } finally {
       setIsAuthLoading(false);
     }
@@ -103,6 +142,7 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
     try {
       await signOutGoogle();
       setCurrentUser(null);
+      setDemoMode(false);
       setSuccessResult(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Gagal keluar akun Google';
@@ -113,6 +153,20 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
   // Create new spreadsheet
   const handleCreateNewSpreadsheet = async () => {
     sounds.playTapSound();
+    if (demoMode) {
+      setIsProcessing(true);
+      setTimeout(() => {
+        setIsProcessing(false);
+        setSuccessResult({
+          url: 'https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUMyHrk-GZp7DemoQA/edit',
+          message: 'Mode Cloud Demo: Google Spreadsheet Siap Diakses!',
+          subDetails: `${settledTransactions.length} transaksi penjualan & ${materials.length} bahan baku siap dibuka di tab atau diunduh ke Looker Studio.`,
+        });
+        sounds.playBellSound();
+      }, 600);
+      return;
+    }
+
     let token = getStoredAccessToken();
     if (!token) {
       try {
@@ -120,6 +174,7 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
         token = authRes.accessToken;
       } catch (err: unknown) {
         setErrorMessage(err instanceof Error ? err.message : 'Izin Google Sheets diperlukan.');
+        setShowCloudDemoFallback(true);
         return;
       }
     }
@@ -158,6 +213,23 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
       return;
     }
 
+    if (demoMode) {
+      setIsProcessing(true);
+      setTimeout(() => {
+        setIsProcessing(false);
+        setSuccessResult({
+          url: `https://docs.google.com/spreadsheets/d/${cleanId}/edit`,
+          message:
+            exportTarget === 'sales'
+              ? 'Rekap Penjualan & PB1 Berhasil Disinkronkan!'
+              : 'Inventaris Stok BOM Berhasil Disinkronkan!',
+          subDetails: `Mode Cloud Demo: Data berhasil disinkronkan ke tab target spreadsheet.`,
+        });
+        sounds.playBellSound();
+      }, 600);
+      return;
+    }
+
     let token = getStoredAccessToken();
     if (!token) {
       try {
@@ -165,6 +237,7 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
         token = authRes.accessToken;
       } catch (err: unknown) {
         setErrorMessage(err instanceof Error ? err.message : 'Izin Google Sheets diperlukan.');
+        setShowCloudDemoFallback(true);
         return;
       }
     }
@@ -207,7 +280,7 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 select-none"
+      className="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 select-none"
       onClick={onClose}
     >
       <div
@@ -222,10 +295,10 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-black text-slate-900 leading-tight">
-                Integrasi Google Sheets &amp; Drive
+                Integrasi Google Sheets &amp; Looker Studio
               </h3>
               <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-                Ekspor Rekap Omzet PB1 (Z-Report) &amp; Inventaris BOM
+                Ekspor Rekap Omzet PB1 (Z-Report), Google Data Studio &amp; Inventaris BOM
               </span>
             </div>
           </div>
@@ -241,12 +314,12 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
         </header>
 
         {/* Content Body */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-5 sm:p-6 space-y-5">
+        <div className="flex-1 min-h-0 overflow-y-auto p-5 sm:p-6 space-y-4">
           {/* Auth Bar */}
           <div className="clay-panel p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            {currentUser ? (
+            {currentUser || demoMode ? (
               <div className="flex items-center gap-3 min-w-0">
-                {currentUser.photoURL ? (
+                {currentUser?.photoURL ? (
                   <img
                     src={currentUser.photoURL}
                     alt={currentUser.displayName || 'Akun'}
@@ -254,20 +327,20 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
                   />
                 ) : (
                   <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white font-extrabold flex items-center justify-center shrink-0">
-                    {currentUser.displayName?.[0] || currentUser.email?.[0] || 'G'}
+                    {demoMode ? 'D' : currentUser?.displayName?.[0] || currentUser?.email?.[0] || 'G'}
                   </div>
                 )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-black text-slate-900 truncate">
-                      {currentUser.displayName || 'Pengguna Google'}
+                      {demoMode ? 'Dripperize (Mode Cloud Demo)' : currentUser?.displayName || 'Pengguna Google'}
                     </span>
                     <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 uppercase">
-                      Terhubung
+                      {demoMode ? 'Cloud Demo QA' : 'Terhubung'}
                     </span>
                   </div>
                   <span className="text-xs text-slate-500 font-mono truncate block">
-                    {currentUser.email}
+                    {demoMode ? 'Dripperize@gmail.com · OAuth Mock Client' : currentUser?.email}
                   </span>
                 </div>
               </div>
@@ -279,11 +352,26 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
                 <p className="text-xs text-slate-500 leading-relaxed">
                   Hubungkan akun Google Drive untuk membuat dan menyinkronkan spreadsheet secara otomatis.
                 </p>
+                {showCloudDemoFallback && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playTapSound();
+                      setDemoMode(true);
+                      setErrorMessage(null);
+                      setShowCloudDemoFallback(false);
+                    }}
+                    className="clay-btn-emerald min-h-[38px] px-3.5 py-1.5 text-xs font-black flex items-center gap-1.5 cursor-pointer text-white mt-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Gunakan Mode Cloud Demo / Ekspor CSV Google DS</span>
+                  </button>
+                )}
               </div>
             )}
 
-            <div className="shrink-0">
-              {currentUser ? (
+            <div className="shrink-0 flex items-center gap-2">
+              {currentUser || demoMode ? (
                 <button
                   type="button"
                   onClick={handleSignOut}
@@ -293,37 +381,120 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
                   <span>Keluar Akun</span>
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={handleSignIn}
-                  disabled={isAuthLoading}
-                  className="clay-btn-neutral min-h-[44px] px-4 py-2 text-xs font-extrabold flex items-center gap-2.5 cursor-pointer text-slate-800 hover:text-slate-950 bg-white"
-                >
-                  {isAuthLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-                  ) : (
-                    <svg className="w-4 h-4" viewBox="0 0 24 24">
-                      <path
-                        fill="#4285F4"
-                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                      />
-                    </svg>
+                <>
+                  <button
+                    type="button"
+                    onClick={handleSignIn}
+                    disabled={isAuthLoading}
+                    className="clay-btn-neutral min-h-[44px] px-4 py-2 text-xs font-extrabold flex items-center gap-2.5 cursor-pointer text-slate-800 hover:text-slate-950 bg-white"
+                  >
+                    {isAuthLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                    ) : (
+                      <svg className="w-4 h-4" viewBox="0 0 24 24">
+                        <path
+                          fill="#4285F4"
+                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                        />
+                      </svg>
+                    )}
+                    <span>Masuk dengan Google</span>
+                  </button>
+
+                  {!showCloudDemoFallback && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sounds.playTapSound();
+                        setDemoMode(true);
+                      }}
+                      className="clay-btn-neutral min-h-[44px] px-3 py-2 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer text-slate-700"
+                      title="Gunakan simulasi cloud demo tanpa login Google"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Demo Mode</span>
+                    </button>
                   )}
-                  <span>Masuk dengan Google</span>
-                </button>
+                </>
               )}
+            </div>
+          </div>
+
+          {/* Dedicated Google Data Studio (Looker Studio) & Ekspor CSV/Clipboard Card */}
+          <div className="clay-panel p-4 sm:p-5 space-y-3 bg-gradient-to-br from-indigo-50/60 to-emerald-50/60 border border-indigo-200/80">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg clay-btn-indigo flex items-center justify-center text-white shrink-0">
+                <BarChart3 className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs sm:text-sm font-black text-slate-900 leading-tight">
+                  Google Data Studio (Looker Studio) &amp; Ekspor CSV / Clipboard Instan
+                </h4>
+                <p className="text-[11px] text-slate-600 font-semibold mt-0.5">
+                  Unduh sumber data UTF-8 BOM CSV siap import ke Looker Studio atau salin tabel ke Google Sheets tanpa otentikasi.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={handleDownloadSalesCsv}
+                className="clay-btn-emerald min-h-[44px] px-3.5 py-2 text-xs font-black flex items-center justify-center gap-2 text-white cursor-pointer"
+                title="Unduh file CSV Rekap Omzet & PB1 format UTF-8 BOM"
+              >
+                <Download className="w-4 h-4 shrink-0" />
+                <span>
+                  {csvSalesDownloaded ? 'CSV Omzet Terunduh ✓' : 'Unduh CSV Rekap Omzet & PB1 (Looker Studio)'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadInventoryCsv}
+                className="clay-btn-indigo min-h-[44px] px-3.5 py-2 text-xs font-black flex items-center justify-center gap-2 text-white cursor-pointer"
+                title="Unduh file CSV Inventaris Bahan Baku BOM"
+              >
+                <Download className="w-4 h-4 shrink-0" />
+                <span>
+                  {csvInvDownloaded ? 'CSV BOM Terunduh ✓' : 'Unduh CSV Inventaris BOM'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyTsv}
+                className="clay-btn-neutral min-h-[44px] px-3.5 py-2 text-xs font-black flex items-center justify-center gap-2 text-slate-800 cursor-pointer"
+                title="Salin baris rekap omzet ke clipboard untuk paste (Ctrl+V) langsung ke Google Sheets"
+              >
+                <Copy className="w-4 h-4 shrink-0" />
+                <span>
+                  {copiedTsv ? 'Tabel Berhasil Disalin (Ctrl+V) ✓' : 'Salin Tabel ke Clipboard (Paste ke Sheets)'}
+                </span>
+              </button>
+
+              <a
+                href="https://lookerstudio.google.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="clay-btn-dark min-h-[44px] px-3.5 py-2 text-xs font-black flex items-center justify-center gap-2 text-white cursor-pointer no-underline"
+                title="Buka dashboard Google Data Studio (Looker Studio) di tab baru"
+              >
+                <ExternalLink className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Buka Dashboard Google Data Studio (Looker Studio) ↗</span>
+              </a>
             </div>
           </div>
 

@@ -25,7 +25,20 @@ test('generateFigmaWireframeSvg produces valid SVG document with all 5 POS Claym
   assert.equal(svg.includes('id="Frame_07_Owner_Executive_Cockpit"'), true);
   assert.equal(svg.includes('id="Frame_08_Finance_Workspace_PB1_And_Petty_Cash"'), true);
   assert.equal(svg.includes('id="Frame_09_Google_Sheets_And_Drive_Sync"'), true);
+  assert.equal(svg.includes('id="Frame_10_Staff_Admin_PIN_And_Block_Console"'), true);
+  assert.equal(svg.includes('id="Frame_11_Menu_Stock_And_Cancellation_Approval"'), true);
   assert.equal(svg.includes('id="Claymorphism_Design_Tokens_Strip"'), true);
+
+  // Verify all 6 roles & QA PIN presets
+  assert.equal(svg.includes('PIN: 4444 · NFC-OWNER-99'), true);
+  assert.equal(svg.includes('PIN: 3333 · NFC-MANAGER-01'), true);
+  assert.equal(svg.includes('PIN: 1111 · NFC-CASHIER-12'), true);
+  assert.equal(svg.includes('PIN: 5555 · NFC-WAITER-01'), true);
+  assert.equal(svg.includes('PIN: 6666 · NFC-KITCHEN-01'), true);
+  assert.equal(svg.includes('PIN: 2222 · NFC-FINANCE-56'), true);
+
+  // Verify Google Data Studio / Looker Studio callout
+  assert.equal(svg.includes('Google Data Studio (Looker Studio)'), true);
 
   // Verify XML special character escaping so '&' never breaks Figma SVG parser
   assert.equal(svg.includes('Resto Nusantara &amp; Co'), true);

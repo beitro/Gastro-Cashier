@@ -75,7 +75,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
       <div className="space-y-1 mb-3 pb-2.5 border-b border-dashed border-slate-300 text-[11px]">
         <div className="flex justify-between items-center">
           <span className="font-bold text-slate-600">NO. MEJA:</span>
-          <span className="text-base font-black px-2.5 py-0.5 clay-btn-dark font-mono tabular-nums">
+          <span className="text-base font-black bg-slate-900 text-white px-2.5 py-0.5 rounded border border-slate-900 font-mono tabular-nums">
             MEJA {ticket.tableNumber}
           </span>
         </div>
@@ -108,11 +108,11 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
       {/* Items Section */}
       <div className="mb-3 space-y-2.5">
         <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider pb-1 border-b border-slate-300">
-          <span>{isChecker ? 'STATUS & MENU' : 'QTY & MENU'}</span>
-          <span>{isReceipt ? 'TOTAL' : 'CATATAN'}</span>
+          <span>{isChecker ? 'QTY & MENU SAJIAN' : 'QTY & MENU'}</span>
+          <span>{isReceipt ? 'TOTAL' : isChecker ? 'AKSI / STATUS SAJI' : 'STASIUN'}</span>
         </div>
 
-        {ticket.items.map((item: OrderItem, idx: number) => {
+        {(ticket.items || []).map((item: OrderItem, idx: number) => {
           return (
             <div
               key={item.id || idx}
@@ -121,64 +121,76 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
                   onToggleServed(item.id);
                 }
               }}
-              className={`p-2.5 rounded-xl transition-colors ${
-                isChecker && interactiveChecklist ? 'cursor-pointer' : ''
+              className={`p-2.5 rounded-xl border transition-colors ${
+                isChecker && interactiveChecklist && onToggleServed ? 'cursor-pointer' : ''
               } ${
-                item.isServed ? 'bg-emerald-200/70 text-emerald-950' : 'bg-transparent'
+                item.isServed
+                  ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950'
+                  : 'bg-white/70 border-slate-200/80 hover:border-slate-300'
               }`}
             >
               <div className="flex items-start justify-between gap-2.5">
-                <div className="flex items-start gap-2.5 flex-1">
-                  {/* Tactile Clay Checkbox for Checker Slip */}
-                  {isChecker && interactiveChecklist && (
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-slate-900 text-[12px] flex items-center gap-1.5 flex-wrap">
+                    <span className="px-1.5 py-0.5 bg-slate-200/90 text-slate-900 rounded-md font-black text-[11px]">
+                      {item.quantity}x
+                    </span>
+                    <span className={item.isServed ? 'line-through text-slate-600' : ''}>
+                      {item.name}
+                    </span>
+                  </div>
+
+                  {/* Modifiers */}
+                  {item.selectedModifiers && item.selectedModifiers.length > 0 && (
+                    <div className="text-[10px] text-amber-900 font-semibold pl-2 mt-0.5">
+                      ↳ {item.selectedModifiers.map((m) => m.optionName).join(' | ')}
+                    </div>
+                  )}
+
+                  {/* Kitchen Special Notes */}
+                  {item.notes && (
+                    <div className="text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded-md border border-rose-200 mt-1 inline-block">
+                      ★ CATATAN: {item.notes}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right side: Price for receipt or single clear labeled action/status for checker */}
+                <div className="text-right text-[11px] font-bold text-slate-800 shrink-0">
+                  {isReceipt && formatRupiah(item.subtotal)}
+                  {isChecker && interactiveChecklist && onToggleServed && (
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (onToggleServed) onToggleServed(item.id);
+                        onToggleServed(item.id);
                       }}
-                      className={`mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer transition-all ${
+                      title={
                         item.isServed
-                          ? 'clay-btn-emerald'
-                          : 'border-2 border-slate-400 hover:border-slate-700 bg-white'
+                          ? 'Klik untuk membatalkan status tersaji'
+                          : 'Klik untuk menandai menu ini sudah tersaji di meja'
+                      }
+                      aria-label={`Ubah status saji ${item.name}`}
+                      className={`min-h-[32px] px-2.5 py-1 rounded-lg font-sans text-[10px] font-extrabold inline-flex items-center gap-1 cursor-pointer transition-all ${
+                        item.isServed
+                          ? 'bg-emerald-700 text-white shadow-xs hover:bg-emerald-800'
+                          : 'bg-amber-100 text-amber-950 border border-amber-400 hover:bg-amber-200'
                       }`}
-                      title={item.isServed ? 'Batalkan Contreng' : 'Contreng: Makanan sudah disajikan'}
-                      aria-label={`Contreng status ${item.name}`}
                     >
-                      {item.isServed && <Check className="w-4 h-4 stroke-[3] text-white" />}
+                      {item.isServed ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          <span>✓ Tersaji (Klik Batal)</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckSquare className="w-3.5 h-3.5 text-amber-800" />
+                          <span>Contreng Saji</span>
+                        </>
+                      )}
                     </button>
                   )}
-
-                  <div className="flex-1">
-                    <div className="font-bold text-slate-900 text-[12px] flex items-center gap-1.5">
-                      <span className="px-1.5 py-0.5 bg-slate-200/80 text-slate-900 rounded-md font-black text-[11px]">
-                        {item.quantity}x
-                      </span>
-                      <span className={item.isServed ? 'line-through text-slate-600' : ''}>
-                        {item.name}
-                      </span>
-                    </div>
-
-                    {/* Modifiers */}
-                    {item.selectedModifiers && item.selectedModifiers.length > 0 && (
-                      <div className="text-[10px] text-amber-900 font-semibold pl-6 mt-0.5">
-                        ↳ {item.selectedModifiers.map((m) => m.optionName).join(' | ')}
-                      </div>
-                    )}
-
-                    {/* Kitchen Special Notes */}
-                    {item.notes && (
-                      <div className="text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded-md border border-rose-200 mt-1 inline-block">
-                        ★ CATATAN: {item.notes}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Right side: Price for receipt or served status for checker */}
-                <div className="text-right text-[11px] font-bold text-slate-800 shrink-0">
-                  {isReceipt && formatRupiah(item.subtotal)}
-                  {isChecker && (
+                  {isChecker && (!interactiveChecklist || !onToggleServed) && (
                     <span
                       className={`text-[10px] px-2 py-1 rounded-md font-sans font-extrabold uppercase inline-flex items-center gap-1 ${
                         item.isServed
@@ -186,11 +198,11 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
                           : 'bg-amber-200 text-amber-950'
                       }`}
                     >
-                      {item.isServed ? 'TERSAJI' : 'ANTAR'}
+                      {item.isServed ? '[✓ TERSAJI]' : '[BELUM SAJI]'}
                     </span>
                   )}
                   {(isKitchen || isBar) && (
-                    <span className="text-[9px] font-mono text-slate-400">
+                    <span className="text-[9px] font-mono font-bold text-slate-600 bg-slate-200/70 px-1.5 py-0.5 rounded">
                       [{item.destination.toUpperCase()}]
                     </span>
                   )}
@@ -288,20 +300,21 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
         )}
       </div>
 
-      {/* Action buttons (Not visible in physical print) */}
-      <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between gap-2 print:hidden">
+      {/* Action Footer (Not visible in physical print) */}
+      <div className="mt-4 pt-3 border-t-2 border-dashed border-slate-300 flex flex-col gap-1.5 print:hidden">
         <button
           type="button"
           onClick={handlePrint}
-          className="flex-1 min-h-[46px] flex items-center justify-center gap-2 py-2.5 px-4 clay-btn-dark font-sans text-xs sm:text-sm font-extrabold cursor-pointer whitespace-nowrap"
+          title="Cetak slip termal ini ke printer 80mm"
+          className="w-full min-h-[44px] flex items-center justify-center gap-2 py-2.5 px-4 clay-btn-indigo font-sans text-xs font-extrabold cursor-pointer whitespace-nowrap text-white"
         >
-          <Printer className="w-4 h-4" />
-          <span>Cetak Thermal</span>
+          <Printer className="w-4 h-4 shrink-0" />
+          <span>Cetak Struk Ini (80mm)</span>
         </button>
       </div>
 
       {/* Visual Serrated Bottom Edge */}
-      <div className="absolute -bottom-2 left-2 right-2 h-2 flex justify-between overflow-hidden opacity-75">
+      <div className="absolute -bottom-2 left-2 right-2 h-2 flex justify-between overflow-hidden opacity-75 pointer-events-none">
         {Array.from({ length: 28 }).map((_, i) => (
           <span
             key={i}

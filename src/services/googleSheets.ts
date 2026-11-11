@@ -276,3 +276,64 @@ export async function exportInventoryToExistingSpreadsheet(
     spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${cleanId}/edit`,
   };
 }
+
+function formatCsvValue(val: string | number): string {
+  const str = String(val ?? '');
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function triggerBlobDownload(content: string, filename: string, mimeType: string): void {
+  if (typeof document !== 'undefined' && typeof URL !== 'undefined') {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
+/**
+ * Generates and downloads a UTF-8 BOM CSV file of Sales & PB1 rows
+ * ready for direct import into Google Data Studio (Looker Studio) or Google Sheets.
+ */
+export function downloadSalesCsv(
+  sales: Transaction[],
+  filename: string = `Rekap-Omzet-PB1-${new Date().toISOString().slice(0, 10)}.csv`
+): void {
+  const rows = buildSalesSheetRows(sales);
+  const csvString = '\uFEFF' + rows.map((row) => row.map(formatCsvValue).join(',')).join('\r\n');
+  triggerBlobDownload(csvString, filename, 'text/csv;charset=utf-8;');
+}
+
+/**
+ * Generates and downloads a UTF-8 BOM CSV file of BOM Inventory rows.
+ */
+export function downloadInventoryCsv(
+  materials: RawMaterial[],
+  filename: string = `Inventaris-BOM-${new Date().toISOString().slice(0, 10)}.csv`
+): void {
+  const rows = buildInventorySheetRows(materials);
+  const csvString = '\uFEFF' + rows.map((row) => row.map(formatCsvValue).join(',')).join('\r\n');
+  triggerBlobDownload(csvString, filename, 'text/csv;charset=utf-8;');
+}
+
+/**
+ * Copies tab-separated rows of Sales & PB1 to clipboard so users can
+ * paste (Ctrl+V) directly into Google Sheets or Looker Studio data tables.
+ */
+export async function copySalesTsvToClipboard(sales: Transaction[]): Promise<number> {
+  const rows = buildSalesSheetRows(sales);
+  const tsvString = rows.map((row) => row.join('\t')).join('\n');
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    await navigator.clipboard.writeText(tsvString);
+  }
+  return sales.length;
+}

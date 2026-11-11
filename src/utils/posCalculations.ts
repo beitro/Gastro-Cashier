@@ -396,11 +396,120 @@ export function handoffTransactionItemsToWaiter(
 export function countActiveKdsItems(transactions: Record<string, Transaction>): number {
   return Object.values(transactions)
     .filter((tx) => tx.status === 'active')
-    .reduce((acc, tx) => acc + tx.allCurrentItems.filter(isKdsItemActive).length, 0);
+    .reduce((acc, tx) => acc + (tx.allCurrentItems || []).filter(isKdsItemActive).length, 0);
 }
 
 export function countWaiterPickupItems(transactions: Record<string, Transaction>): number {
   return Object.values(transactions)
     .filter((tx) => tx.status === 'active')
-    .reduce((acc, tx) => acc + tx.allCurrentItems.filter(isItemWaitingForWaiter).length, 0);
+    .reduce((acc, tx) => acc + (tx.allCurrentItems || []).filter(isItemWaitingForWaiter).length, 0);
+}
+
+/**
+ * Pure transformer that recalculates subtotal, serviceChargeAmount, taxAmount, and totalAmount
+ * from `tx.allCurrentItems` and `tx.discountAmount || 0`.
+ */
+export function recalculateTransactionTotals(tx: Transaction): Transaction {
+  const items = tx.allCurrentItems || [];
+  const discountAmount = tx.discountAmount || 0;
+  const totals = calculateOrderTotals(items, discountAmount);
+  return {
+    ...tx,
+    allCurrentItems: items,
+    batches: tx.batches || [],
+    discountAmount,
+    ...totals,
+  };
+}
+
+/**
+ * Pure transformer that updates a single item's cookingStatus across `allCurrentItems` and `batches`.
+ */
+export function updateTransactionItemCookingStatus(
+  tx: Transaction,
+  itemId: string,
+  status: CookingStatus,
+  nowIso: string = new Date().toISOString()
+): Transaction {
+  const mapItem = (item: OrderItem): OrderItem =>
+    item.id === itemId
+      ? {
+          ...item,
+          cookingStatus: status,
+          handedOffAt: status === 'handed_off' ? nowIso : item.handedOffAt,
+        }
+      : item;
+
+  return {
+    ...tx,
+    allCurrentItems: (tx.allCurrentItems || []).map(mapItem),
+    batches: (tx.batches || []).map((b) => ({
+      ...b,
+      items: (b.items || []).map(mapItem),
+    })),
+  };
+}
+
+/**
+ * Pure transformer that toggles a single item's `isServed` status across `allCurrentItems` and `batches`.
+ */
+export function toggleServedStatusInTransaction(tx: Transaction, itemId: string): Transaction {
+  const mapItem = (item: OrderItem): OrderItem =>
+    item.id === itemId
+      ? {
+          ...item,
+          isServed: !item.isServed,
+        }
+      : item;
+
+  return {
+    ...tx,
+    allCurrentItems: (tx.allCurrentItems || []).map(mapItem),
+    batches: (tx.batches || []).map((b) => ({
+      ...b,
+      items: (b.items || []).map(mapItem),
+    })),
+  };
+}
+
+/**
+ * Pure transformer that marks all items in a transaction as served (`isServed: true`).
+ */
+export function markAllServedInTransaction(tx: Transaction): Transaction {
+  const mapItem = (item: OrderItem): OrderItem => ({
+    ...item,
+    isServed: true,
+    cookingStatus: item.cookingStatus || 'handed_off',
+  });
+
+  return {
+    ...tx,
+    allCurrentItems: (tx.allCurrentItems || []).map(mapItem),
+    batches: (tx.batches || []).map((b) => ({
+      ...b,
+      items: (b.items || []).map(mapItem),
+    })),
+  };
+}
+
+/**
+ * Pure transformer that marks all handed-off items (`isItemWaitingForWaiter`) as served (`isServed: true`).
+ */
+export function markHandedOffItemsServedInTransaction(tx: Transaction): Transaction {
+  const mapItem = (item: OrderItem): OrderItem =>
+    isItemWaitingForWaiter(item)
+      ? {
+          ...item,
+          isServed: true,
+        }
+      : item;
+
+  return {
+    ...tx,
+    allCurrentItems: (tx.allCurrentItems || []).map(mapItem),
+    batches: (tx.batches || []).map((b) => ({
+      ...b,
+      items: (b.items || []).map(mapItem),
+    })),
+  };
 }

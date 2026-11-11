@@ -22,6 +22,11 @@ import {
   countActiveKdsItems,
   countWaiterPickupItems,
   isItemWaitingForWaiter,
+  recalculateTransactionTotals,
+  updateTransactionItemCookingStatus,
+  toggleServedStatusInTransaction,
+  markAllServedInTransaction,
+  markHandedOffItemsServedInTransaction,
 } from './utils/posCalculations';
 import { assertTableAccess, audit, authenticateStaff, canApproveCancellation, canOperatePOS, createSession, migrateTables, migrateTransactions, appendBatch } from './utils/auditFlow';
 import { sounds } from './utils/soundEffects';
@@ -839,7 +844,7 @@ export default function App() {
             : t
         )
       );
-      setRawMaterials((prev) => deductRecipeMaterials(prev, params.newItems, MENU_ITEMS));
+      setRawMaterials((prev) => deductRecipeMaterials(params.newItems, prev, MENU_ITEMS).updatedMaterials);
       setAllPrintTickets((prev) => [...newTickets, ...prev]);
       setOrderModalTable(null);
       setPrinterModalTickets(newTickets);
@@ -1069,6 +1074,20 @@ export default function App() {
           [transactionId]: markAllServedInTransaction(tx),
         };
       });
+      setAllPrintTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.transactionId === transactionId
+            ? {
+                ...ticket,
+                items: (ticket.items || []).map((entry) => ({
+                  ...entry,
+                  isServed: true,
+                  cookingStatus: entry.cookingStatus || 'handed_off',
+                })),
+              }
+            : ticket
+        )
+      );
       return;
     }
     const items = activeTransactions[transactionId]?.allCurrentItems || [];
@@ -1077,6 +1096,20 @@ export default function App() {
         updateApiOrderItem(transactionId, item.id, { cookingStatus: 'handed_off', isServed: true })
       ));
       await refreshApiSnapshot();
+      setAllPrintTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.transactionId === transactionId
+            ? {
+                ...ticket,
+                items: (ticket.items || []).map((entry) => ({
+                  ...entry,
+                  isServed: true,
+                  cookingStatus: entry.cookingStatus || 'handed_off',
+                })),
+              }
+            : ticket
+        )
+      );
     } catch (error) {
       await refreshApiSnapshot().catch(() => undefined);
       window.alert('Penandaan semua item gagal disimpan: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -1085,6 +1118,8 @@ export default function App() {
 
   // Mark handed-off items served for a table (persisted by the API or local fallback).
   const handleMarkHandedOffServed = async (transactionId: string) => {
+    const items = activeTransactions[transactionId]?.allCurrentItems.filter(isItemWaitingForWaiter) || [];
+    const targetIds = new Set(items.map((item) => item.id));
     if (!getApiToken()) {
       setActiveTransactions((prev) => {
         const tx = prev[transactionId];
@@ -1094,14 +1129,39 @@ export default function App() {
           [transactionId]: markHandedOffItemsServedInTransaction(tx),
         };
       });
+      setAllPrintTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.transactionId === transactionId
+            ? {
+                ...ticket,
+                items: (ticket.items || []).map((entry) =>
+                  targetIds.has(entry.id) || isItemWaitingForWaiter(entry)
+                    ? { ...entry, isServed: true }
+                    : entry
+                ),
+              }
+            : ticket
+        )
+      );
       return;
     }
-    const items = activeTransactions[transactionId]?.allCurrentItems.filter(isItemWaitingForWaiter) || [];
     try {
       await Promise.all(items.map(item =>
         updateApiOrderItem(transactionId, item.id, { isServed: true })
       ));
       await refreshApiSnapshot();
+      setAllPrintTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.transactionId === transactionId
+            ? {
+                ...ticket,
+                items: (ticket.items || []).map((entry) =>
+                  targetIds.has(entry.id) ? { ...entry, isServed: true } : entry
+                ),
+              }
+            : ticket
+        )
+      );
     } catch (error) {
       await refreshApiSnapshot().catch(() => undefined);
       window.alert('Konfirmasi antar pesanan gagal disimpan: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -1481,8 +1541,8 @@ export default function App() {
           }}
           onToggleServed={(itemId) => {
             // Find active transaction that has this item
-            const foundTx = Object.values(activeTransactions).find((tx) =>
-              tx.allCurrentItems.some((i) => i.id === itemId)
+            const foundTx = (Object.values(activeTransactions) as Transaction[]).find((tx) =>
+              (tx.allCurrentItems || []).some((i) => i.id === itemId)
             );
             if (foundTx) {
               handleToggleItemServed(foundTx.id, itemId);

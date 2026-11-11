@@ -40,7 +40,7 @@ export const WaiterCheckerModal: React.FC<WaiterCheckerModalProps> = ({
   const occupiedTables = tables.filter((t) => t.status === 'occupied');
   const firstTableWithPickup = occupiedTables.find((t) => {
     const tx = t.currentTransactionId ? transactions[t.currentTransactionId] : null;
-    return tx?.allCurrentItems.some(isItemWaitingForWaiter);
+    return (tx?.allCurrentItems || []).some(isItemWaitingForWaiter);
   });
 
   const [selectedTableId, setSelectedTableId] = useState<string>(
@@ -53,6 +53,7 @@ export const WaiterCheckerModal: React.FC<WaiterCheckerModalProps> = ({
     : null;
 
   const items = activeTx?.allCurrentItems || [];
+  const batches = activeTx?.batches || [];
   const servedCount = items.filter((i) => i.isServed).length;
   const waitingPickupCount = items.filter(isItemWaitingForWaiter).length;
   const totalCount = items.length;
@@ -168,9 +169,10 @@ export const WaiterCheckerModal: React.FC<WaiterCheckerModalProps> = ({
           ) : (
             occupiedTables.map((tbl) => {
               const tx = tbl.currentTransactionId ? transactions[tbl.currentTransactionId] : null;
-              const sCount = tx ? tx.allCurrentItems.filter((i) => i.isServed).length : 0;
-              const pickupCount = tx ? tx.allCurrentItems.filter(isItemWaitingForWaiter).length : 0;
-              const tCount = tx ? tx.allCurrentItems.length : 0;
+              const txItems = tx?.allCurrentItems || [];
+              const sCount = txItems.filter((i) => i.isServed).length;
+              const pickupCount = txItems.filter(isItemWaitingForWaiter).length;
+              const tCount = txItems.length;
               const isDone = tCount > 0 && sCount === tCount;
               const isSelected = tbl.id === selectedTableId;
 
@@ -249,7 +251,7 @@ export const WaiterCheckerModal: React.FC<WaiterCheckerModalProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-slate-500 mt-1 font-mono tabular-nums font-semibold">
-                  Bill ID: {activeTx.id}
+                  Bill ID: {activeTx.id} · {batches.length || 1} Batch
                 </p>
               </div>
 

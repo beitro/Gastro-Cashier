@@ -441,38 +441,52 @@ export function generateFigmaWireframeSvg(options: FigmaWireframeOptions = {}): 
 
     <!-- Virtual NFC Cards Right Box -->
     <rect x="382" y="1052" width="300" height="320" rx="18" fill="#ffffff" stroke="#e2e8f0" />
-    <text x="398" y="1078" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#0f172a">SIMULASI TAP KARTU NFC STAFF:</text>
+    <text x="398" y="1078" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#0f172a">SIMULASI TAP NFC &amp; PIN 6 ROLE:</text>
 
     <!-- Card 1: Owner -->
-    <rect x="398" y="1092" width="268" height="68" rx="14" fill="#fffbeb" stroke="#fcd34d" />
-    <rect x="410" y="1104" width="44" height="44" rx="10" fill="url(#clayAmber)" />
-    <text x="432" y="1131" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#ffffff">👑</text>
-    <text x="464" y="1120" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#92400e">Hendrawan Kusuma</text>
-    <text x="464" y="1138" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#b45309">ROLE: OWNER · PIN 9999</text>
+    <rect x="398" y="1090" width="268" height="44" rx="10" fill="#fffbeb" stroke="#fcd34d" />
+    <text x="412" y="1110" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#92400e">👑 Owner (Hendrawan)</text>
+    <text x="412" y="1126" font-family="JetBrains Mono, monospace" font-size="9" font-weight="700" fill="#b45309">PIN: 4444 · NFC-OWNER-99</text>
 
-    <!-- Card 2: Cashier -->
-    <rect x="398" y="1170" width="268" height="68" rx="14" fill="#ecfdf5" stroke="#a7f3d0" />
-    <rect x="410" y="1182" width="44" height="44" rx="10" fill="url(#clayEmerald)" />
-    <text x="432" y="1209" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#ffffff">💳</text>
-    <text x="464" y="1198" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#065f46">Budi Prasetyo</text>
-    <text x="464" y="1216" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#047857">ROLE: CASHIER · PIN 1234</text>
+    <!-- Card 2: Manager -->
+    <rect x="398" y="1140" width="268" height="44" rx="10" fill="#fff1f2" stroke="#fecdd3" />
+    <text x="412" y="1160" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#9f1239">🛡️ Manager (Manajer Outlet)</text>
+    <text x="412" y="1176" font-family="JetBrains Mono, monospace" font-size="9" font-weight="700" fill="#e11d48">PIN: 3333 · NFC-MANAGER-01</text>
 
-    <!-- Card 3: Finance -->
-    <rect x="398" y="1248" width="268" height="68" rx="14" fill="#eef2ff" stroke="#c7d2fe" />
-    <rect x="410" y="1260" width="44" height="44" rx="10" fill="url(#clayIndigo)" />
-    <text x="432" y="1287" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#ffffff">📊</text>
-    <text x="464" y="1276" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#312e81">Ratna Dewi</text>
-    <text x="464" y="1294" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#4338ca">ROLE: FINANCE · PIN 5678</text>
+    <!-- Card 3: Cashier -->
+    <rect x="398" y="1190" width="268" height="44" rx="10" fill="#ecfdf5" stroke="#a7f3d0" />
+    <text x="412" y="1210" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#065f46">💳 Kasir (Budi Prasetyo)</text>
+    <text x="412" y="1226" font-family="JetBrains Mono, monospace" font-size="9" font-weight="700" fill="#047857">PIN: 1111 · NFC-CASHIER-12</text>
+
+    <!-- Card 4: Waiter -->
+    <rect x="398" y="1240" width="268" height="44" rx="10" fill="#f0f9ff" stroke="#bae6fd" />
+    <text x="412" y="1260" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#075985">🍽️ Waiter (Doni Setiawan)</text>
+    <text x="412" y="1276" font-family="JetBrains Mono, monospace" font-size="9" font-weight="700" fill="#0284c7">PIN: 5555 · NFC-WAITER-01</text>
+
+    <!-- Card 5: Kitchen & Finance -->
+    <rect x="398" y="1290" width="130" height="44" rx="10" fill="#fff7ed" stroke="#fed7aa" />
+    <text x="408" y="1310" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#9a3412">👨‍🍳 Kitchen (6666)</text>
+    <text x="408" y="1325" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#c2410c">NFC-KITCHEN-01</text>
+
+    <rect x="536" y="1290" width="130" height="44" rx="10" fill="#eef2ff" stroke="#c7d2fe" />
+    <text x="546" y="1310" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#312e81">📊 Finance (2222)</text>
+    <text x="546" y="1325" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#4338ca">NFC-FINANCE-56</text>
 
     <!-- Auto-Fill Quick Action Footer -->
     <rect x="110" y="1388" width="572" height="108" rx="16" fill="#dde5f0" />
-    <text x="130" y="1412" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#334155">QUICK AUTO-FILL CREDENTIALS TESTING:</text>
-    <rect x="130" y="1424" width="168" height="40" rx="10" fill="url(#clayAmber)" />
-    <text x="214" y="1449" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#ffffff">👑 Owner (9999)</text>
-    <rect x="312" y="1424" width="168" height="40" rx="10" fill="url(#clayEmerald)" />
-    <text x="396" y="1449" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#ffffff">💳 Kasir (1234)</text>
-    <rect x="494" y="1424" width="168" height="40" rx="10" fill="url(#clayIndigo)" />
-    <text x="578" y="1449" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#ffffff">📊 Finance (5678)</text>
+    <text x="130" y="1412" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#334155">QUICK AUTO-FILL CREDENTIALS TESTING (6 ROLE):</text>
+    <rect x="130" y="1424" width="168" height="32" rx="8" fill="url(#clayAmber)" />
+    <text x="214" y="1444" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#ffffff">👑 Owner (4444)</text>
+    <rect x="312" y="1424" width="168" height="32" rx="8" fill="url(#clayCrimson)" />
+    <text x="396" y="1444" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#ffffff">🛡️ Manager (3333)</text>
+    <rect x="494" y="1424" width="168" height="32" rx="8" fill="url(#clayEmerald)" />
+    <text x="578" y="1444" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#ffffff">💳 Kasir (1111)</text>
+    <rect x="130" y="1460" width="168" height="28" rx="8" fill="url(#clayDark)" />
+    <text x="214" y="1478" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="9" font-weight="800" fill="#ffffff">🍽️ Waiter (5555)</text>
+    <rect x="312" y="1460" width="168" height="28" rx="8" fill="url(#clayAmber)" />
+    <text x="396" y="1478" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="9" font-weight="800" fill="#ffffff">👨‍🍳 Kitchen (6666)</text>
+    <rect x="494" y="1460" width="168" height="28" rx="8" fill="url(#clayIndigo)" />
+    <text x="578" y="1478" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="9" font-weight="800" fill="#ffffff">📊 Finance (2222)</text>
   </g>
 
   <!-- ARTBOARD 07: OWNER EXECUTIVE COCKPIT -->
@@ -670,9 +684,9 @@ export function generateFigmaWireframeSvg(options: FigmaWireframeOptions = {}): 
     <text x="2610" y="1300" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="12" font-weight="800" fill="#e11d48">-Rp 25.000</text>
   </g>
 
-  <!-- ARTBOARD 09: GOOGLE SHEETS & DRIVE SYNC -->
+  <!-- ARTBOARD 09: GOOGLE SHEETS, DRIVE & LOOKER STUDIO SYNC -->
   <g id="Frame_09_Google_Sheets_And_Drive_Sync">
-    <text x="2700" y="864" font-family="JetBrains Mono, monospace" font-size="13" font-weight="700" fill="#334155">09 / INTEGRASI GOOGLE SHEETS &amp; DRIVE (EKSPOR OMZET &amp; BOM)</text>
+    <text x="2700" y="864" font-family="JetBrains Mono, monospace" font-size="13" font-weight="700" fill="#334155">09 / INTEGRASI REKAP OMZET GOOGLE SHEETS &amp; GOOGLE DATA STUDIO (LOOKER STUDIO)</text>
     <rect x="2700" y="878" width="956" height="660" rx="26" fill="#e8eef5" stroke="#cbd5e1" stroke-width="2" filter="url(#clayShadow)" />
 
     <!-- Sheets Modal Box -->
@@ -682,8 +696,8 @@ export function generateFigmaWireframeSvg(options: FigmaWireframeOptions = {}): 
     <rect x="2744" y="916" width="868" height="64" rx="16" fill="#ffffff" stroke="#e2e8f0" />
     <rect x="2760" y="928" width="40" height="40" rx="12" fill="url(#clayEmerald)" />
     <text x="2780" y="953" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="14" font-weight="800" fill="#ffffff">📊</text>
-    <text x="2814" y="946" font-family="Plus Jakarta Sans, sans-serif" font-size="16" font-weight="800" fill="#0f172a">Integrasi Google Sheets &amp; Drive</text>
-    <text x="2814" y="964" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="700" fill="#059669">Ekspor Real-time Rekap Omzet PB1 (Z-Report) &amp; Inventaris Bahan Baku BOM</text>
+    <text x="2814" y="946" font-family="Plus Jakarta Sans, sans-serif" font-size="16" font-weight="800" fill="#0f172a">Integrasi Google Sheets &amp; Google Data Studio (Looker Studio)</text>
+    <text x="2814" y="964" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="700" fill="#059669">Ekspor Real-time Rekap Omzet PB1 (Z-Report), CSV Looker Studio &amp; Inventaris BOM</text>
 
     <!-- Connected Account -->
     <rect x="2744" y="992" width="868" height="60" rx="16" fill="#ffffff" stroke="#e2e8f0" />
@@ -700,7 +714,7 @@ export function generateFigmaWireframeSvg(options: FigmaWireframeOptions = {}): 
     <text x="2776" y="1102" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#065f46">TAB 1: REKAP PENJUALAN &amp; PAJAK PB1</text>
     <text x="2760" y="1140" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="600" fill="#334155">• Kolom: No Meja, Bill ID, Waktu, Metode Bayar</text>
     <text x="2760" y="1164" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="600" fill="#334155">• Subtotal, Service Charge 5%, Pajak PB1 10%</text>
-    <text x="2760" y="1188" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="600" fill="#334155">• Grand Total, Nama Pramusaji &amp; Kasir</text>
+    <text x="2760" y="1188" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="600" fill="#334155">• Siap Diimpor ke Google Data Studio (Looker Studio)</text>
     <text x="2760" y="1212" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="600" fill="#334155">• Rekonsiliasi Otomatis Harian (Z-Report)</text>
 
     <rect x="3188" y="1064" width="424" height="230" rx="18" fill="#ffffff" stroke="#e2e8f0" />
@@ -711,16 +725,21 @@ export function generateFigmaWireframeSvg(options: FigmaWireframeOptions = {}): 
     <text x="3204" y="1188" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="600" fill="#334155">• HPP Satuan &amp; Total Nilai Valuasi Aset</text>
     <text x="3204" y="1212" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="600" fill="#334155">• Status Peringatan: Restock / Aman</text>
 
-    <!-- Create Button CTA -->
-    <rect x="2744" y="1310" width="868" height="56" rx="16" fill="url(#clayEmerald)" />
-    <text x="3178" y="1344" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="800" fill="#ffffff">KONFIRMASI &amp; BUAT GOOGLE SPREADSHEET BARU</text>
+    <!-- Create Button CTA + Looker Studio Quick Actions -->
+    <rect x="2744" y="1310" width="560" height="56" rx="16" fill="url(#clayEmerald)" />
+    <text x="3024" y="1344" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="800" fill="#ffffff">KONFIRMASI &amp; BUAT GOOGLE SPREADSHEET BARU</text>
+
+    <rect x="3316" y="1310" width="296" height="56" rx="16" fill="url(#clayIndigo)" />
+    <text x="3464" y="1344" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#ffffff">Unduh CSV (Google Data Studio)</text>
 
     <rect x="2744" y="1380" width="868" height="114" rx="16" fill="#dde5f0" />
-    <text x="2764" y="1406" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#334155">HASIL GENERATE TAUTAN LANGSUNG SPREADSHEET:</text>
-    <rect x="2764" y="1418" width="680" height="42" rx="10" fill="#ffffff" />
+    <text x="2764" y="1406" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#334155">HASIL GENERATE TAUTAN LANGSUNG SPREADSHEET &amp; LOOKER STUDIO:</text>
+    <rect x="2764" y="1418" width="520" height="42" rx="10" fill="#ffffff" />
     <text x="2778" y="1444" font-family="JetBrains Mono, monospace" font-size="11" fill="#047857">https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUU.../edit</text>
-    <rect x="3456" y="1418" width="140" height="42" rx="10" fill="url(#clayIndigo)" />
-    <text x="3526" y="1444" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#ffffff">Buka di Sheets ↗</text>
+    <rect x="3296" y="1418" width="140" height="42" rx="10" fill="url(#clayIndigo)" />
+    <text x="3366" y="1444" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#ffffff">Buka Sheets ↗</text>
+    <rect x="3446" y="1418" width="166" height="42" rx="10" fill="url(#clayDark)" />
+    <text x="3529" y="1444" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#ffffff">Looker Studio ↗</text>
   </g>
 
   <!-- ===================================================================== -->
@@ -756,47 +775,103 @@ export function generateFigmaWireframeSvg(options: FigmaWireframeOptions = {}): 
     <text x="1516" y="1760" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="800" fill="#ffffff">Action Indigo</text>
     <text x="1516" y="1782" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#e0e7ff">#4338CA → #312E81</text>
 
-    <!-- Role Permissions Matrix Table -->
-    <rect x="96" y="1830" width="3528" height="340" rx="20" fill="#ffffff" stroke="#dce4ee" />
-    <text x="126" y="1868" font-family="Plus Jakarta Sans, sans-serif" font-size="16" font-weight="800" fill="#0f172a">Matriks Hak Akses &amp; Tampilan Khusus Role Staff Resto</text>
+    <!-- v2 Feature Callout 1: Staff Admin, PIN & Block Console (Owner) -->
+    <g id="Frame_10_Staff_Admin_PIN_And_Block_Console">
+      <rect x="1780" y="1666" width="880" height="140" rx="18" fill="#ffffff" stroke="#cbd5e1" filter="url(#clayShadowSm)" />
+      <rect x="1796" y="1680" width="34" height="34" rx="10" fill="url(#clayAmber)" />
+      <text x="1813" y="1702" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="14" font-weight="800" fill="#ffffff">⚙️</text>
+      <text x="1840" y="1698" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="800" fill="#0f172a">Frame 10 / Admin &amp; Staff Console (Owner): Setting PIN &amp; Blokir Akun</text>
+      <text x="1840" y="1716" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="700" fill="#b45309">Fitur v2.4: Tambah Karyawan Baru, Set/Reset PIN 4–8 Digit, Blokir &amp; Buka Blokir (suspended/active)</text>
+      <rect x="1796" y="1730" width="260" height="60" rx="10" fill="#fffbeb" stroke="#fde68a" />
+      <text x="1808" y="1752" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#92400e">+ Tambah Karyawan Baru</text>
+      <text x="1808" y="1772" font-family="JetBrains Mono, monospace" font-size="9" fill="#b45309">Nama, 6 Role, PIN 4-8 Digit</text>
+      <rect x="2070" y="1730" width="280" height="60" rx="10" fill="#ecfdf5" stroke="#a7f3d0" />
+      <text x="2082" y="1752" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#065f46">🔑 Ubah &amp; Reset PIN 4-8 Digit</text>
+      <text x="2082" y="1772" font-family="JetBrains Mono, monospace" font-size="9" fill="#047857">Revoke Sesi Aktif + Audit Log</text>
+      <rect x="2364" y="1730" width="280" height="60" rx="10" fill="#fff1f2" stroke="#fecdd3" />
+      <text x="2376" y="1752" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#9f1239">🚫 Blokir &amp; Buka Blokir Akun</text>
+      <text x="2376" y="1772" font-family="JetBrains Mono, monospace" font-size="9" fill="#e11d48">Self-block &amp; Last Owner Guard</text>
+    </g>
+
+    <!-- v2 Feature Callout 2: Menu Stock Control & Cancellation Approval (Manager/Owner) -->
+    <g id="Frame_11_Menu_Stock_And_Cancellation_Approval">
+      <rect x="2680" y="1666" width="944" height="140" rx="18" fill="#ffffff" stroke="#cbd5e1" filter="url(#clayShadowSm)" />
+      <rect x="2696" y="1680" width="34" height="34" rx="10" fill="url(#clayEmerald)" />
+      <text x="2713" y="1702" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="14" font-weight="800" fill="#ffffff">📦</text>
+      <text x="2740" y="1698" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="800" fill="#0f172a">Frame 11 / Kontrol Stok Menu &amp; Void Approval (Manager/Owner)</text>
+      <text x="2740" y="1716" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="700" fill="#047857">Reservasi Stok Real-time, Badge Stok Habis, Permintaan Void &amp; Approval Pengembalian Stok</text>
+      <rect x="2696" y="1730" width="290" height="60" rx="10" fill="#f0fdf4" stroke="#bbf7d0" />
+      <text x="2708" y="1752" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#166534">📊 Reservasi Stok Menu Atomik</text>
+      <text x="2708" y="1772" font-family="JetBrains Mono, monospace" font-size="9" fill="#15803d">Auto Stok Habis (Disable Input)</text>
+      <rect x="3000" y="1730" width="300" height="60" rx="10" fill="#fffbeb" stroke="#fde68a" />
+      <text x="3012" y="1752" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#92400e">⚠️ Request Pembatalan (Reason)</text>
+      <text x="3012" y="1772" font-family="JetBrains Mono, monospace" font-size="9" fill="#b45309">Kasir/Waiter Ajukan Void Menu</text>
+      <rect x="3314" y="1730" width="294" height="60" rx="10" fill="#ecfdf5" stroke="#a7f3d0" />
+      <text x="3326" y="1752" font-family="Plus Jakarta Sans, sans-serif" font-size="10" font-weight="800" fill="#065f46">✅ Approval Manager/Owner</text>
+      <text x="3326" y="1772" font-family="JetBrains Mono, monospace" font-size="9" fill="#047857">Setujui Void &amp; Restore Stok</text>
+    </g>
+
+    <!-- Role Permissions Matrix Table (6 Roles) -->
+    <rect x="96" y="1824" width="3528" height="376" rx="20" fill="#ffffff" stroke="#dce4ee" />
+    <text x="126" y="1858" font-family="Plus Jakarta Sans, sans-serif" font-size="16" font-weight="800" fill="#0f172a">Matriks Hak Akses &amp; Tampilan Khusus 6 Role Staff Resto</text>
 
     <!-- Table Header -->
-    <rect x="126" y="1884" width="3468" height="44" rx="10" fill="#f1f5f9" />
-    <text x="146" y="1911" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">PERAN STAFF</text>
-    <text x="420" y="1911" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">KODE PIN / NFC</text>
-    <text x="720" y="1911" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">TAMPILAN KHUSUS UTAMA</text>
-    <text x="1420" y="1911" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">HAK AKSES FITUR POS</text>
-    <text x="2480" y="1911" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">BATASAN &amp; PROTEKSI KEAMANAN</text>
+    <rect x="126" y="1872" width="3468" height="38" rx="10" fill="#f1f5f9" />
+    <text x="146" y="1896" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">PERAN STAFF</text>
+    <text x="440" y="1896" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">KODE PIN / NFC (QA PRESETS)</text>
+    <text x="780" y="1896" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">TAMPILAN KHUSUS UTAMA</text>
+    <text x="1520" y="1896" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">HAK AKSES FITUR POS</text>
+    <text x="2540" y="1896" font-family="Plus Jakarta Sans, sans-serif" font-size="11" font-weight="800" fill="#475569">BATASAN &amp; PROTEKSI KEAMANAN</text>
 
-    <!-- Row Owner -->
-    <text x="146" y="1956" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#b45309">👑 OWNER (Hendrawan)</text>
-    <text x="420" y="1956" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 9999 · NFC-OWNER-99</text>
-    <text x="720" y="1956" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Cockpit Eksekutif, Okupansi Meja, Analisis Laba, ROP Bahan &amp; KDS</text>
-    <text x="1420" y="1956" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Akses Penuh: Floor Plan, KDS, Checker, BOM Stok, Kas Kecil, Reset Demo &amp; Google Sheets</text>
-    <text x="2480" y="1956" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#059669">Superadmin: Akses tanpa batasan, verifikasi PIN/NFC saat kunci layar</text>
+    <!-- Row 1: Owner -->
+    <text x="146" y="1932" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#b45309">👑 OWNER (Hendrawan)</text>
+    <text x="440" y="1932" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 4444 · NFC-OWNER-99</text>
+    <text x="780" y="1932" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Cockpit Eksekutif, Admin Karyawan (Set PIN &amp; Blokir), Okupansi Meja, Analisis Laba</text>
+    <text x="1520" y="1932" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Akses Penuh: Admin Staff, Floor Plan, KDS, Checker, Stok Menu, Kas Kecil, Reset Demo &amp; Google Sheets</text>
+    <text x="2540" y="1932" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#059669">Superadmin: Akses tanpa batasan, perlindungan self-block &amp; last owner</text>
+    <line x1="126" y1="1946" x2="3594" y2="1946" stroke="#f1f5f9" stroke-width="1.5" />
 
-    <!-- Line 1 -->
-    <line x1="126" y1="1978" x2="3594" y2="1978" stroke="#f1f5f9" stroke-width="1.5" />
+    <!-- Row 2: Manager -->
+    <text x="146" y="1974" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#9f1239">🛡️ MANAGER (Manajer Outlet)</text>
+    <text x="440" y="1974" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 3333 · NFC-MANAGER-01</text>
+    <text x="780" y="1974" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Floor Plan, Void Approval Item, Kontrol Stok Menu &amp; Rekap Penjualan Shift</text>
+    <text x="1520" y="1974" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Operasi Meja, Approval Pembatalan Item (Restore Stok), KDS Dapur, Checker, Laporan Shift</text>
+    <text x="2540" y="1974" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#047857">Otorisasi Shift: Dapat membatalkan item aktif, tidak dapat modifikasi konfigurasi tenant</text>
+    <line x1="126" y1="1988" x2="3594" y2="1988" stroke="#f1f5f9" stroke-width="1.5" />
 
-    <!-- Row Cashier -->
+    <!-- Row 3: Cashier -->
     <text x="146" y="2016" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#047857">💳 KASIR (Budi Prasetyo)</text>
-    <text x="420" y="2016" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 1234 · NFC-CASHIER-12</text>
-    <text x="720" y="2016" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Floor Plan 36 Meja, Checkout Cepat, Dual Mode Bayar, Cetak Struk</text>
-    <text x="1420" y="2016" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Buka Meja, Input Menu &amp; Modifier, Payment First/Last, Struk Sah, KDS Dapur, Checker</text>
-    <text x="2480" y="2016" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#e11d48">Terbatas: Dilarang ubah tarif PB1/Service, margin laba &amp; HPP sensitif disembunyikan</text>
+    <text x="440" y="2016" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 1111 · NFC-CASHIER-12</text>
+    <text x="780" y="2016" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Floor Plan 36 Meja, Checkout Cepat, Dual Mode Bayar, Cetak Struk Sah &amp; Rekap Omzet</text>
+    <text x="1520" y="2016" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Buka Meja, Input Menu &amp; Modifier, Settlement Lunas, Rekap PB1, KDS Dapur, Checker</text>
+    <text x="2540" y="2016" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#e11d48">Terbatas: Dilarang ubah tarif PB1/Service; void menu harus melalui approval Manager/Owner</text>
+    <line x1="126" y1="2030" x2="3594" y2="2030" stroke="#f1f5f9" stroke-width="1.5" />
 
-    <!-- Line 2 -->
-    <line x1="126" y1="2038" x2="3594" y2="2038" stroke="#f1f5f9" stroke-width="1.5" />
+    <!-- Row 4: Waiter -->
+    <text x="146" y="2058" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#0369a1">🍽️ WAITER (Doni Setiawan)</text>
+    <text x="440" y="2058" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 5555 · NFC-WAITER-01</text>
+    <text x="780" y="2058" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Checker Waiter (Pencontrengan Meja) &amp; Floor Plan Monitoring Tamu</text>
+    <text x="1520" y="2058" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Input Tambah Order Meja, Contreng Sajian Siap Antar, Pantau Durasi Meja</text>
+    <text x="2540" y="2058" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0284c7">Layanan Meja: Tidak memiliki akses tutup meja lunas / pembayaran atau kas kecil</text>
+    <line x1="126" y1="2072" x2="3594" y2="2072" stroke="#f1f5f9" stroke-width="1.5" />
 
-    <!-- Row Finance -->
-    <text x="146" y="2076" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#4338ca">📊 FINANCE (Ratna Dewi)</text>
-    <text x="420" y="2076" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 5678 · NFC-FINANCE-56</text>
-    <text x="720" y="2076" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Workspace Pembukuan, Rekonsiliasi EDC/QRIS, Buku Kas Kecil &amp; PB1</text>
-    <text x="1420" y="2076" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Audit Struk Omzet, Form Catat Kas Kecil, Saldo Kas Laci Fisik, Ekspor Google Sheets</text>
-    <text x="2480" y="2076" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#4338ca">Fokus Akuntansi: Tab operasional pesanan kasir (Floor Plan/KDS) tidak ditampilkan</text>
+    <!-- Row 5: Kitchen -->
+    <text x="146" y="2100" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#c2410c">👨‍🍳 KITCHEN (Chef Dapur)</text>
+    <text x="440" y="2100" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 6666 · NFC-KITCHEN-01</text>
+    <text x="780" y="2100" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">KDS Dapur Live Station (Cooking Status: Antrean, Dimasak, Matang, Oper ke Waiter)</text>
+    <text x="1520" y="2100" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Update Status Sajian Dapur/Bar, Bump Order Matang, Operasi Antrean Masak</text>
+    <text x="2540" y="2100" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#ea580c">Dapur Khusus: Hanya dapat mengakses KDS station dapur/bar, tanpa akses tagihan</text>
+    <line x1="126" y1="2114" x2="3594" y2="2114" stroke="#f1f5f9" stroke-width="1.5" />
+
+    <!-- Row 6: Finance -->
+    <text x="146" y="2142" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="800" fill="#4338ca">📊 FINANCE (Ratna Dewi)</text>
+    <text x="440" y="2142" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#0f172a">PIN: 2222 · NFC-FINANCE-56</text>
+    <text x="780" y="2142" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Workspace Pembukuan, Rekonsiliasi EDC/QRIS, Buku Kas Kecil &amp; PB1, Ekspor Google Sheets/DS</text>
+    <text x="1520" y="2142" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="600" fill="#334155">Audit Struk Omzet, Form Catat Kas Kecil, Saldo Kas Laci Fisik, Ekspor Google Sheets &amp; Google DS</text>
+    <text x="2540" y="2142" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="#4338ca">Fokus Akuntansi: Tab operasional pesanan kasir (Floor Plan/KDS) tidak ditampilkan</text>
 
     <!-- Detailed Flow Specification -->
-    <rect x="96" y="2194" width="3528" height="400" rx="20" fill="#ffffff" stroke="#dce4ee" />
+    <rect x="96" y="2216" width="3528" height="388" rx="20" fill="#ffffff" stroke="#dce4ee" />
     <text x="126" y="2234" font-family="Plus Jakarta Sans, sans-serif" font-size="16" font-weight="800" fill="#0f172a">Alur End-to-End Operasional RestoPOS (Dual Payment Mode, Handoff KDS &amp; Audit PB1)</text>
 
     <text x="126" y="2274" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="600" fill="#334155">1. OTORISASI MULTI-ROLE: Staff menempelkan kartu badge NFC fisik atau menginput 4-digit PIN pada keypad layar sentuh.</text>

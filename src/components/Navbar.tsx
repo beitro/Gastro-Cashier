@@ -50,7 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   lowStockAlertCount,
   activeKdsCount = 0,
   waiterPickupCount = 0,
-  paymentFlowMode = 'payment_last',
+  paymentFlowMode = 'payment_last' as PaymentFlowMode,
   onOpenGoogleSheets,
   currentStaff,
   onLockScreen,
@@ -139,6 +139,12 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: <Printer className="w-4 h-4 stroke-[2]" />,
       badge: recentTicketsCount > 0 ? recentTicketsCount : undefined,
       roles: ['owner', 'manager', 'cashier', 'waiter'],
+    },
+    {
+      id: 'sales',
+      label: 'Rekap Omzet',
+      icon: <BarChart3 className="w-4 h-4 stroke-[2]" />,
+      roles: ['owner', 'manager', 'cashier', 'finance'],
     },
     {
       id: 'finance',
@@ -263,7 +269,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </span>
         </div>
 
-        {/* Google Sheets Integration Button */}
+        {/* Google Sheets & Google Data Studio Integration Button */}
         {onOpenGoogleSheets && (
           <button
             type="button"
@@ -271,12 +277,12 @@ export const Navbar: React.FC<NavbarProps> = ({
               if (soundEnabled) sounds.playTapSound();
               onOpenGoogleSheets();
             }}
-            aria-label="Integrasi Google Sheets"
-            title="Ekspor Rekap Omzet PB1 dan Inventaris Bahan ke Google Sheets"
+            aria-label="Integrasi Google Sheets & Google Data Studio"
+            title="Integrasi Rekap Omzet ke Google Sheets & Google Data Studio (Looker Studio)"
             className="min-h-[42px] px-3.5 py-2 text-xs font-black flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer clay-btn-emerald text-white"
           >
             <FileSpreadsheet className="w-4 h-4 shrink-0 stroke-[2.2]" />
-            <span className="hidden sm:inline">Google Sheets</span>
+            <span className="hidden sm:inline">Google Sheets / DS</span>
           </button>
         )}
 
