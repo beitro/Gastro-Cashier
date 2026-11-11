@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StaffAccount } from '../types/pos';
-import { DEFAULT_STAFF_ACCOUNTS } from '../utils/authRoles';
+import { DEFAULT_STAFF_ACCOUNTS, authenticateByPin, authenticateByNfc } from '../utils/authRoles';
 import { sounds } from '../utils/soundEffects';
 import {
   KeyRound,
@@ -13,6 +13,7 @@ import {
   Delete,
   CheckCircle2,
   Scan,
+  Lock,
 } from 'lucide-react';
 
 const MAX_PIN_ATTEMPTS = 5;
@@ -20,6 +21,7 @@ const LOCK_DURATION_MS = 30_000;
 
 interface LoginModalProps {
   currentStaff: StaffAccount | null;
+  staffAccounts?: StaffAccount[];
   onLoginSuccess: (staff: StaffAccount) => void;
   onCancel?: () => void;
   canCancel?: boolean;
@@ -27,10 +29,22 @@ interface LoginModalProps {
 
 export const LoginModal: React.FC<LoginModalProps> = ({
   currentStaff,
+  staffAccounts,
   onLoginSuccess,
   onCancel,
   canCancel = false,
 }) => {
+  const staffList: StaffAccount[] = React.useMemo(() => {
+    if (staffAccounts && staffAccounts.length > 0) return staffAccounts;
+    try {
+      const saved = localStorage.getItem('resto_pos_staff_accounts_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_STAFF_ACCOUNTS;
+  }, [staffAccounts]);
   const [pin, setPin] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isNfcScanning, setIsNfcScanning] = useState(false);
@@ -93,10 +107,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     if (isPinLocked) return;
     sounds.playTapSound();
     setErrorMessage(null);
-    if (pin.length < 4) {
+    if (pin.length < 8) {
       const nextPin = pin + num;
       setPin(nextPin);
-      if (nextPin.length === 4) {
+      const hasLongerPrefix = staffList.some((s) => (s.pin || '').length > nextPin.length && (s.pin || '').startsWith(nextPin));
+      const hasExactMatch = staffList.some((s) => s.pin === nextPin);
+      if ((nextPin.length === 4 && !hasLongerPrefix) || (nextPin.length > 4 && hasExactMatch && !hasLongerPrefix)) {
         verifyEnteredPin(nextPin);
       }
     }
@@ -118,31 +134,139 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const verifyEnteredPin = async (inputPin: string) => {
     if (isPinLocked) { setErrorMessage('Input PIN sedang dikunci.'); setPin(''); return; }
+    const cleanPin = inputPin.trim();
+    if (!/^\d{4,8}$/.test(cleanPin)) {
+      setErrorMessage('PIN harus 4–8 digit angka.');
+      return;
+    }
     try {
-      const response = await fetch('/api/auth/pin', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:inputPin}) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Autentikasi gagal.');
-      localStorage.setItem('gastro_cashier_api_token', data.token);
-      sounds.playBellSound(); setFailedAttempts(0); setLockUntil(null);
-      setNfcSuccessAnimation('Selamat datang, ' + data.staff.name + '!');
-      setTimeout(() => onLoginSuccess(data.staff), 400);
+      let apiHandled = false;
+      try {
+        const response = await fetch('/api/auth/pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: cleanPin }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data?.token && data?.staff) {
+          localStorage.setItem('gastro_cashier_api_token', data.token);
+          sounds.playBellSound();
+          setFailedAttempts(0);
+          setLockUntil(null);
+          setNfcSuccessAnimation('Selamat datang, ' + data.staff.name + '!');
+          setTimeout(() => onLoginSuccess(data.staff), 400);
+          return;
+        }
+        if (response.status === 403 || response.status === 429 || data?.code === 'ACCOUNT_BLOCKED') {
+          apiHandled = true;
+          throw new Error(data.error || 'Akun karyawan sedang diblokir atau akses ditolak.');
+        }
+        if (response.status === 401 && data?.error) {
+          // Check if local demo account matches when testing in demo/hybrid mode
+          const localAuth = authenticateByPin(cleanPin, staffList);
+          if (localAuth.success && localAuth.staff) {
+            localStorage.removeItem('gastro_cashier_api_token');
+            sounds.playBellSound();
+            setFailedAttempts(0);
+            setLockUntil(null);
+            setNfcSuccessAnimation('Selamat datang, ' + localAuth.staff.name + '!');
+            setTimeout(() => onLoginSuccess(localAuth.staff!), 400);
+            return;
+          }
+          if (localAuth.error && localAuth.error.includes('diblokir')) {
+            apiHandled = true;
+            throw new Error(localAuth.error);
+          }
+          apiHandled = true;
+          throw new Error(data.error);
+        }
+      } catch (apiErr) {
+        if (apiHandled) throw apiErr;
+      }
+
+      // Local fallback mode when API server is offline or running in demo mode
+      const localResult = authenticateByPin(cleanPin, staffList);
+      if (!localResult.success || !localResult.staff) {
+        throw new Error(localResult.error || 'PIN tidak valid atau akun tidak aktif.');
+      }
+      localStorage.removeItem('gastro_cashier_api_token');
+      sounds.playBellSound();
+      setFailedAttempts(0);
+      setLockUntil(null);
+      setNfcSuccessAnimation('Selamat datang, ' + localResult.staff.name + '!');
+      setTimeout(() => onLoginSuccess(localResult.staff!), 400);
     } catch (error) {
-      sounds.playTapSound(); const n=failedAttempts+1; setFailedAttempts(n);
-      if(n>=MAX_PIN_ATTEMPTS){setLockUntil(Date.now()+LOCK_DURATION_MS);setErrorMessage('Terlalu banyak percobaan. Input dikunci 30 detik.');}
-      else setErrorMessage((error instanceof Error?error.message:'PIN tidak valid')+' · Sisa percobaan: '+(MAX_PIN_ATTEMPTS-n));
-      setTimeout(()=>setPin(''),600);
+      sounds.playTapSound();
+      const n = failedAttempts + 1;
+      setFailedAttempts(n);
+      if (n >= MAX_PIN_ATTEMPTS) {
+        setLockUntil(Date.now() + LOCK_DURATION_MS);
+        setErrorMessage('Terlalu banyak percobaan. Input dikunci 30 detik.');
+      } else {
+        setErrorMessage((error instanceof Error ? error.message : 'PIN tidak valid') + ' · Sisa percobaan: ' + (MAX_PIN_ATTEMPTS - n));
+      }
+      setTimeout(() => setPin(''), 600);
     }
   };
   const handleNfcAuth = async (tagUid: string) => {
     try {
-      const response=await fetch('/api/auth/nfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:tagUid})});
-      const data=await response.json();
-      if(!response.ok) throw new Error(data.error||'Kartu NFC tidak dikenali.');
-      localStorage.setItem('gastro_cashier_api_token',data.token);
-      sounds.playBellSound();setFailedAttempts(0);setLockUntil(null);
-      setNfcSuccessAnimation('NFC terverifikasi: '+data.staff.name);
-      setTimeout(()=>onLoginSuccess(data.staff),500);
-    } catch(error){sounds.playTapSound();setErrorMessage(error instanceof Error?error.message:'Autentikasi NFC gagal.');}
+      let apiHandled = false;
+      try {
+        const response = await fetch('/api/auth/nfc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: tagUid }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data?.token && data?.staff) {
+          localStorage.setItem('gastro_cashier_api_token', data.token);
+          sounds.playBellSound();
+          setFailedAttempts(0);
+          setLockUntil(null);
+          setNfcSuccessAnimation('NFC terverifikasi: ' + data.staff.name);
+          setTimeout(() => onLoginSuccess(data.staff), 500);
+          return;
+        }
+        if (response.status === 403 || response.status === 429 || data?.code === 'ACCOUNT_BLOCKED') {
+          apiHandled = true;
+          throw new Error(data.error || 'Akun karyawan ini sedang diblokir.');
+        }
+        if (response.status === 401 && data?.error) {
+          const localNfc = authenticateByNfc(tagUid, staffList);
+          if (localNfc.success && localNfc.staff) {
+            localStorage.removeItem('gastro_cashier_api_token');
+            sounds.playBellSound();
+            setFailedAttempts(0);
+            setLockUntil(null);
+            setNfcSuccessAnimation('NFC terverifikasi: ' + localNfc.staff.name);
+            setTimeout(() => onLoginSuccess(localNfc.staff!), 500);
+            return;
+          }
+          if (localNfc.error && localNfc.error.includes('diblokir')) {
+            apiHandled = true;
+            throw new Error(localNfc.error);
+          }
+          apiHandled = true;
+          throw new Error(data.error);
+        }
+      } catch (apiErr) {
+        if (apiHandled) throw apiErr;
+      }
+
+      const localResult = authenticateByNfc(tagUid, staffList);
+      if (!localResult.success || !localResult.staff) {
+        throw new Error(localResult.error || 'Kartu NFC tidak dikenali.');
+      }
+      localStorage.removeItem('gastro_cashier_api_token');
+      sounds.playBellSound();
+      setFailedAttempts(0);
+      setLockUntil(null);
+      setNfcSuccessAnimation('NFC terverifikasi: ' + localResult.staff.name);
+      setTimeout(() => onLoginSuccess(localResult.staff!), 500);
+    } catch (error) {
+      sounds.playTapSound();
+      setErrorMessage(error instanceof Error ? error.message : 'Autentikasi NFC gagal.');
+    }
   };
 
   const handleQuickDemoStaff = (staff: StaffAccount) => {
@@ -237,11 +361,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               {/* PIN Indicator Dots */}
               <div className="clay-panel p-4 flex flex-col items-center justify-center space-y-2">
                 <span className="text-[11px] font-black uppercase tracking-wider text-slate-500">
-                  Masukkan 4-Digit Kode Keamanan
+                  Masukkan PIN Keamanan (4–8 Digit)
                 </span>
 
-                <div className="flex items-center gap-4 py-1">
-                  {[0, 1, 2, 3].map((idx) => {
+                <div className="flex items-center gap-3 py-1">
+                  {Array.from({ length: Math.max(4, pin.length) }).map((_, idx) => {
                     const isFilled = pin.length > idx;
                     return (
                       <div
@@ -301,6 +425,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   <Delete className="w-5 h-5" />
                 </button>
               </div>
+
+              {pin.length >= 4 && (
+                <div className="max-w-[290px] mx-auto pt-1">
+                  <button
+                    type="button"
+                    onClick={() => verifyEnteredPin(pin)}
+                    disabled={isPinLocked}
+                    className="w-full min-h-[44px] clay-btn-emerald text-white text-xs font-black uppercase tracking-wider cursor-pointer"
+                  >
+                    Masuk dengan PIN ({pin.length} Digit)
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -327,16 +464,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 </span>
 
                 <div className="grid grid-cols-1 gap-2.5">
-                  {DEFAULT_STAFF_ACCOUNTS.map((staff) => {
+                  {staffList.filter((s) => s.nfcTagUid).map((staff) => {
                     const isOwner = staff.role === 'owner';
                     const isCashier = staff.role === 'cashier';
+                    const isBlocked = (staff.status && staff.status !== 'active') || staff.isActive === false;
                     return (
                       <button
                         key={staff.id}
                         type="button"
                         onClick={() => handleNfcAuth(staff.nfcTagUid)}
                         className={`w-full p-3.5 rounded-2xl flex items-center justify-between text-left cursor-pointer transition-all hover:scale-[1.01] ${
-                          isOwner
+                          isBlocked
+                            ? 'bg-rose-50/80 border border-rose-300 opacity-75'
+                            : isOwner
                             ? 'clay-tint-amber border border-amber-300'
                             : isCashier
                             ? 'clay-tint-emerald border border-emerald-300'
@@ -346,14 +486,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                         <div className="flex items-center gap-3">
                           <div
                             className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0 shadow-sm ${
-                              isOwner
+                              isBlocked
+                                ? 'bg-rose-600'
+                                : isOwner
                                 ? 'bg-amber-600'
                                 : isCashier
                                 ? 'bg-emerald-600'
                                 : 'bg-indigo-600'
                             }`}
                           >
-                            {isOwner ? (
+                            {isBlocked ? (
+                              <Lock className="w-5 h-5" />
+                            ) : isOwner ? (
                               <Crown className="w-5 h-5" />
                             ) : isCashier ? (
                               <CreditCard className="w-5 h-5" />
@@ -368,14 +512,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                               </span>
                               <span
                                 className={`text-[10px] font-black px-1.5 py-0.5 rounded-md uppercase ${
-                                  isOwner
+                                  isBlocked
+                                    ? 'bg-rose-200 text-rose-900'
+                                    : isOwner
                                     ? 'bg-amber-200 text-amber-900'
                                     : isCashier
                                     ? 'bg-emerald-200 text-emerald-900'
                                     : 'bg-indigo-200 text-indigo-900'
                                 }`}
                               >
-                                {staff.role}
+                                {isBlocked ? 'DIBLOKIR' : staff.role}
                               </span>
                             </div>
                             <span className="text-[11px] font-mono text-slate-600">
@@ -398,38 +544,39 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           {/* Quick PIN Presets Bar (Always visible for fast testing) */}
           <div className="clay-well p-2.5 rounded-2xl space-y-1.5">
             <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">
-              Auto-Fill Akun Demo:
+              Auto-Fill Akun Staff & QA Demo:
             </span>
             <div className="grid grid-cols-3 gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleQuickDemoStaff(DEFAULT_STAFF_ACCOUNTS[0])}
-                disabled={isPinLocked}
-                className="clay-btn-neutral min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer"
-              >
-                <Crown className="w-3.5 h-3.5 text-amber-600" />
-                <span>Owner (9999)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickDemoStaff(DEFAULT_STAFF_ACCOUNTS[1])}
-                disabled={isPinLocked}
-                className="clay-btn-neutral min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer"
-              >
-                <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Kasir (1234)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickDemoStaff(DEFAULT_STAFF_ACCOUNTS[2])}
-                disabled={isPinLocked}
-                className="clay-btn-neutral min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer"
-              >
-                <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Finance (5678)</span>
-              </button>
+              {staffList.map((staff) => {
+                const isBlocked = (staff.status && staff.status !== 'active') || staff.isActive === false;
+                return (
+                  <button
+                    key={staff.id}
+                    type="button"
+                    onClick={() => handleQuickDemoStaff(staff)}
+                    disabled={isPinLocked}
+                    className={`min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer rounded-xl ${
+                      isBlocked
+                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                        : 'clay-btn-neutral'
+                    }`}
+                    title={`${staff.name} (${staff.role}) - PIN: ${staff.pin}${isBlocked ? ' [DIBLOKIR]' : ''}`}
+                  >
+                    {isBlocked ? (
+                      <Lock className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    ) : staff.role === 'owner' ? (
+                      <Crown className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    ) : staff.role === 'cashier' ? (
+                      <CreditCard className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <BarChart3 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    )}
+                    <span className="truncate">
+                      {staff.name.split(' ')[0]} ({staff.pin})
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

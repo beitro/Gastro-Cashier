@@ -147,20 +147,34 @@ app.get('/api/health', asyncRoute(async (_req, res) => {
   res.json({ ok: true, database: 'postgresql', version: r.rows[0].version });
 }));
 
-// Emergency release: bootstrap creates a staff account through the separate privileged connection.
+// Emergency release: bootstrap creates a staff account through the separate privileged connection unless ALLOW_BOOTSTRAP=true.
 app.use('/api/bootstrap', (req,res,next) => {
   if (req.method !== 'POST') return next();
+  if (process.env.EMERGENCY_STAFF_READONLY !== 'true' || process.env.ALLOW_BOOTSTRAP === 'true') return next();
   return res.status(423).json({ error:'Bootstrap dinonaktifkan selama emergency release; provisioning harus dilakukan di luar API runtime.', code:'BOOTSTRAP_DISABLED' });
 });
 
 // One-time tenant/outlet/staff provisioning. Keep BOOTSTRAP_TOKEN out of source control.
 app.post('/api/bootstrap', asyncRoute(async (req, res) => {
-  if (!process.env.BOOTSTRAP_TOKEN || req.get('x-bootstrap-token') !== process.env.BOOTSTRAP_TOKEN) return res.status(403).json({ error: 'Bootstrap tidak diizinkan.' });
-  if (!bootstrapPool) return res.status(503).json({ error: 'Bootstrap nonaktif: BOOTSTRAP_DATABASE_URL belum dikonfigurasi.' });
-  const { tenantName, tenantSlug, outletName, outletSlug, staffName, email, pin, nfcUid } = req.body || {};
-  if (![tenantName,tenantSlug,outletName,outletSlug,staffName,pin].every(v => typeof v === 'string' && v.trim()) || !/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'Data tenant/outlet/staff wajib diisi; PIN 4–8 digit.' });
+  const allowQaBootstrap = process.env.ALLOW_BOOTSTRAP === 'true';
+  const validToken = Boolean(process.env.BOOTSTRAP_TOKEN && req.get('x-bootstrap-token') === process.env.BOOTSTRAP_TOKEN);
+  if (!validToken && !allowQaBootstrap) return res.status(403).json({ error: 'Bootstrap tidak diizinkan.' });
+  const targetPool = bootstrapPool || (allowQaBootstrap ? pool : null);
+  if (!targetPool) return res.status(503).json({ error: 'Bootstrap nonaktif: BOOTSTRAP_DATABASE_URL belum dikonfigurasi.' });
+  const body = req.body || {};
+  const tenantName = String(body.tenantName || (allowQaBootstrap ? 'Resto Nusantara' : '')).trim();
+  const tenantSlug = String(body.tenantSlug || (allowQaBootstrap ? 'resto-nusantara' : '')).trim();
+  const outletName = String(body.outletName || (allowQaBootstrap ? 'Resto Nusantara - Outlet Utama' : '')).trim();
+  const outletSlug = String(body.outletSlug || (allowQaBootstrap ? 'outlet-utama' : '')).trim();
+  const staffName = String(body.staffName || (allowQaBootstrap ? 'Hendrawan Kusuma' : '')).trim();
+  const email = body.email ? String(body.email).trim().toLowerCase() : (allowQaBootstrap ? 'owner@nusantara.id' : null);
+  const pin = String(body.pin || (allowQaBootstrap ? '9999' : '')).trim();
+  const nfcUid = body.nfcUid ? String(body.nfcUid).trim().toUpperCase() : null;
+  if (![tenantName,tenantSlug,outletName,outletSlug,staffName,pin].every(v => typeof v === 'string' && v.trim()) || !/^\d{4,8}$/.test(pin)) {
+    return res.status(400).json({ error: 'Data tenant/outlet/staff wajib diisi; PIN 4–8 digit.' });
+  }
   const pinHash = await hashCredential(pin);
-  const nfcHash = nfcUid ? await hashCredential(String(nfcUid).trim().toUpperCase()) : null;
+  const nfcHash = nfcUid ? await hashCredential(nfcUid) : null;
   const created = await transaction(async c => {
     await c.query("SELECT pg_advisory_xact_lock(hashtext('gastro_cashier_one_time_bootstrap'))");
     await setRlsContext(c, { capabilities: ['bootstrap'] });
@@ -169,11 +183,11 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
     const o = (await c.query('INSERT INTO outlets(tenant_id,slug,name) VALUES($1,$2,$3) RETURNING id', [t.id,outletSlug,outletName])).rows[0];
     await setRlsContext(c, { tenant_id: t.id, outlet_id: o.id, capabilities: ['bootstrap','tenant_scope'] });
     await c.query('INSERT INTO tenant_settings(tenant_id) VALUES($1)', [t.id]);
-    const staff = (await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash,nfc_credential_hash) VALUES($1,$2,$3,$4) RETURNING id', [email || null,staffName,pinHash,nfcHash])).rows[0];
+    const staff = (await c.query('INSERT INTO staff_accounts(email,display_name,pin_hash,nfc_credential_hash) VALUES($1,$2,$3,$4) RETURNING id', [email,staffName,pinHash,nfcHash])).rows[0];
     const membership = (await c.query("INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,'owner') RETURNING id", [t.id,staff.id])).rows[0];
     await c.query("INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,'owner')", [t.id,o.id,membership.id]);
     return { tenantId:t.id,outletId:o.id,staffId:staff.id };
-  }, bootstrapPool);
+  }, targetPool);
   if (created.alreadyBootstrapped) return res.status(409).json({ error:'Bootstrap sudah pernah diselesaikan. Endpoint ini hanya untuk provisioning awal.' });
   res.status(201).json({ ok:true,...created });
 }));
@@ -207,22 +221,25 @@ async function authenticate(req, res, next) {
 async function issueSession(staffId, credentialColumn, credential, res) {
   const issued = await transaction(async c => {
     await setRlsContext(c, { capabilities: ['auth_lookup'] });
-    const matches = await c.query(`SELECT a.id AS staff_id,a.display_name,tm.role_code,t.id AS tenant_id,t.name AS tenant_name,o.id AS outlet_id,o.name AS outlet_name,a.${credentialColumn} AS credential_hash
-      FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.status='active'
+    const matches = await c.query(`SELECT a.id AS staff_id,a.display_name,a.status AS account_status,tm.role_code,tm.status AS tm_status,om.status AS om_status,t.id AS tenant_id,t.name AS tenant_name,o.id AS outlet_id,o.name AS outlet_name,a.${credentialColumn} AS credential_hash
+      FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id
       JOIN tenants t ON t.id=tm.tenant_id AND t.status='active'
-      JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.status='active'
+      JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id
       JOIN outlets o ON o.id=om.outlet_id AND o.status='active'
-      WHERE a.id=$1 AND a.status='active' ORDER BY t.created_at,o.created_at LIMIT 20`,[staffId]);
+      WHERE a.id=$1 ORDER BY t.created_at,o.created_at LIMIT 20`,[staffId]);
     const matched = [];
     for (const row of matches.rows) if (await verifyCredential(credential,row.credential_hash)) matched.push(row);
     if (!matched.length) return { error:'invalid' };
-    if (matched.length > 1) return { error:'multiple' };
-    if (!normalizeRole(matched[0].role_code)) return { error:'role' };
-    const row = matched[0], token = randomBytes(32).toString('base64url');
+    const activeMatched = matched.filter(r => r.account_status === 'active' && r.tm_status === 'active' && r.om_status === 'active');
+    if (!activeMatched.length) return { error:'blocked' };
+    if (activeMatched.length > 1) return { error:'multiple' };
+    if (!normalizeRole(activeMatched[0].role_code)) return { error:'role' };
+    const row = activeMatched[0], token = randomBytes(32).toString('base64url');
     await setRlsContext(c, { tenant_id: row.tenant_id, outlet_id: row.outlet_id, actor_staff_id: row.staff_id, role_code: row.role_code, capabilities: ['session_create'] });
     await c.query('INSERT INTO staff_sessions(staff_id,tenant_id,outlet_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+make_interval(hours => 12))',[row.staff_id,row.tenant_id,row.outlet_id,sha256(token)]);
     return { row, token };
   });
+  if (issued.error === 'blocked') return res.status(403).json({ error:'Akun karyawan ini sedang diblokir atau dinonaktifkan. Hubungi Owner.', code:'ACCOUNT_BLOCKED' });
   if (issued.error === 'invalid') return res.status(401).json({ error:'Kredensial tidak valid atau akun tidak aktif.' });
   if (issued.error === 'multiple') return res.status(409).json({ error:'Staff memiliki lebih dari satu outlet. Endpoint pemilihan outlet perlu digunakan.' });
   if (issued.error === 'role') return res.status(403).json({ error:'Role staff belum dikenali. Hubungi administrator.' });
@@ -231,28 +248,36 @@ async function issueSession(staffId, credentialColumn, credential, res) {
 }
 
 app.post('/api/auth/pin', asyncRoute(async (req,res) => {
-  const pin = String(req.body?.pin || '');
-  if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error:'PIN harus tepat 4 digit.' });
+  const pin = String(req.body?.pin || '').trim();
+  if (!/^\d{4,8}$/.test(pin)) return res.status(400).json({ error:'PIN harus 4–8 digit angka.' });
   const retryAfter = await consumeAuthAttempt(req);
   if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
-  const candidates = await transaction(async c => { await setRlsContext(c, { capabilities: ['auth_lookup'] }); return c.query("SELECT id,pin_hash FROM staff_accounts WHERE status='active' AND pin_hash IS NOT NULL"); });
+  const candidates = await transaction(async c => { await setRlsContext(c, { capabilities: ['auth_lookup'] }); return c.query("SELECT id,status,pin_hash FROM staff_accounts WHERE pin_hash IS NOT NULL"); });
   const found = [];
   for (const row of candidates.rows) if (await verifyCredential(pin,row.pin_hash)) found.push(row);
-  if (found.length !== 1) return res.status(401).json({ error:'PIN tidak valid atau akun tidak aktif.' });
+  const activeFound = found.filter(r => r.status === 'active');
+  if (!activeFound.length && found.length === 1) {
+    return res.status(403).json({ error:'Akun karyawan ini sedang diblokir atau dinonaktifkan. Hubungi Owner.', code:'ACCOUNT_BLOCKED' });
+  }
+  if (activeFound.length !== 1) return res.status(401).json({ error:'PIN tidak valid atau akun tidak aktif.' });
   await clearAuthAttempts(req);
-  return issueSession(found[0].id,'pin_hash',pin,res);
+  return issueSession(activeFound[0].id,'pin_hash',pin,res);
 }));
 app.post('/api/auth/nfc', asyncRoute(async (req,res) => {
   const uid = String(req.body?.uid || '').trim().toUpperCase();
   if (!uid) return res.status(400).json({ error:'NFC UID wajib diisi.' });
   const retryAfter = await consumeAuthAttempt(req);
   if (retryAfter) { res.set('Retry-After', String(retryAfter)); return res.status(429).json({ error:'Terlalu banyak percobaan autentikasi. Coba lagi nanti.' }); }
-  const candidates = await transaction(async c => { await setRlsContext(c, { capabilities: ['auth_lookup'] }); return c.query("SELECT id,nfc_credential_hash FROM staff_accounts WHERE status='active' AND nfc_credential_hash IS NOT NULL"); });
+  const candidates = await transaction(async c => { await setRlsContext(c, { capabilities: ['auth_lookup'] }); return c.query("SELECT id,status,nfc_credential_hash FROM staff_accounts WHERE nfc_credential_hash IS NOT NULL"); });
   const found = [];
   for (const row of candidates.rows) if (await verifyCredential(uid,row.nfc_credential_hash)) found.push(row);
-  if (found.length !== 1) return res.status(401).json({ error:'Kartu NFC tidak dikenal atau tidak aktif.' });
+  const activeFound = found.filter(r => r.status === 'active');
+  if (!activeFound.length && found.length === 1) {
+    return res.status(403).json({ error:'Akun karyawan ini sedang diblokir atau dinonaktifkan. Hubungi Owner.', code:'ACCOUNT_BLOCKED' });
+  }
+  if (activeFound.length !== 1) return res.status(401).json({ error:'Kartu NFC tidak dikenal atau tidak aktif.' });
   await clearAuthAttempts(req);
-  return issueSession(found[0].id,'nfc_credential_hash',uid,res);
+  return issueSession(activeFound[0].id,'nfc_credential_hash',uid,res);
 }));
 app.post('/api/auth/logout', authenticate, asyncRoute(async (req,res) => {
   await transaction(async c => {
@@ -284,35 +309,125 @@ async function writeAdminAudit(c,req,action,staffId,beforeData,afterData,metadat
   await c.query('INSERT INTO audit_logs(tenant_id,outlet_id,actor_staff_id,action,entity_type,entity_id,ip_address,user_agent,before_data,after_data,metadata) VALUES($1,$2,$3,$4,\'staff\',$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb)',
     [req.auth.tenant_id,req.auth.outlet_id,req.auth.staff_id,action,staffId,req.ip||null,req.get('user-agent')||null,JSON.stringify(beforeData),JSON.stringify(afterData),JSON.stringify(metadata)]);
 }
-// Emergency release freeze: Admin staff reads remain available, all staff mutations are blocked.
+// Optional emergency release freeze: only active when EMERGENCY_STAFF_READONLY=true.
 app.use('/api/admin/staff', (req,res,next) => {
+  if (process.env.EMERGENCY_STAFF_READONLY !== 'true') return next();
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   return res.status(423).json({ error:'Administrasi staff sementara read-only selama emergency release POS.', code:'STAFF_ADMIN_READ_ONLY' });
 });
 const ADMIN_ROLES=['owner','manager','cashier','waiter','kitchen','finance'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
-  const rows=await adminScoped(req,c=>c.query('SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,(a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at FROM staff_accounts a JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1 JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 WHERE (tm.status=\'active\' AND om.status=\'active\') OR a.status<>\'active\' ORDER BY a.display_name',[req.auth.tenant_id,req.auth.outlet_id]));
+  const rows=await adminScoped(req,c=>c.query(`SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,
+    (a.status='active' AND tm.status='active' AND om.status='active') AS is_active,
+    (a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at
+    FROM staff_accounts a
+    JOIN tenant_memberships tm ON tm.staff_id=a.id AND tm.tenant_id=$1
+    JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2
+    ORDER BY a.display_name`,[req.auth.tenant_id,req.auth.outlet_id]));
   res.json(rows.rows);
 }));
 app.post('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
-  const name=String(req.body?.name||'').trim(),email=req.body?.email?String(req.body.email).trim().toLowerCase():null,phone=req.body?.phone?String(req.body.phone).trim():null;
-  const role=req.body?.role,pin=String(req.body?.pin||'');
-  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4}$/.test(pin)||(!email&&!phone)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone))))return res.status(400).json({error:'Nama, kontak (email/telepon), role, atau PIN tidak valid.'});
+  const name=String(req.body?.displayName ?? req.body?.name ?? '').trim();
+  const email=req.body?.email?String(req.body.email).trim().toLowerCase():null;
+  const phone=req.body?.phone?String(req.body.phone).trim():null;
+  const nfcUid=req.body?.nfcUid?String(req.body.nfcUid).trim().toUpperCase():null;
+  const role=String(req.body?.roleCode ?? req.body?.role ?? '').trim().toLowerCase();
+  const pin=String(req.body?.pin||'').trim();
+  if(!name||name.length>120||!ADMIN_ROLES.includes(role)||!/^\d{4,8}$/.test(pin)||(email&&(email.length>254||!/^\S+@\S+\.\S+$/.test(email)))||(phone&&(phone.length>40||!/^\+?[0-9 ()-]{6,40}$/.test(phone)))||(nfcUid&&nfcUid.length>200)){
+    return res.status(400).json({error:'Nama lengkap, role POS, dan PIN (4–8 digit) wajib valid.'});
+  }
   const pinHash=await hashCredential(pin);
+  const nfcHash=nfcUid?await hashCredential(nfcUid):null;
   const staffId=randomUUID();
   const created=await adminScoped(req,async c=>{
     await setRlsContext(c,{tenant_id:req.auth.tenant_id,outlet_id:req.auth.outlet_id,actor_staff_id:req.auth.staff_id,role_code:req.auth.role_code,pending_staff_id:staffId,capabilities:['tenant_scope','staff_admin']});
-    const a=(await c.query('INSERT INTO staff_accounts(id,email,phone,display_name,pin_hash) VALUES($1,$2,$3,$4,$5) RETURNING id',[staffId,email,phone,name,pinHash])).rows[0];
-    const tm=(await c.query('INSERT INTO tenant_memberships(tenant_id,staff_id,role_code) VALUES($1,$2,$3) RETURNING id',[req.auth.tenant_id,a.id,role])).rows[0];
-    await c.query('INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code) VALUES($1,$2,$3,$4)',[req.auth.tenant_id,req.auth.outlet_id,tm.id,role]);
-    await writeAdminAudit(c,req,'staff.created',a.id,null,{name,role,status:'active'},{pinConfigured:true,nfcConfigured:false});
-    return {id:a.id};
+    const a=(await c.query('INSERT INTO staff_accounts(id,email,phone,display_name,pin_hash,nfc_credential_hash,status) VALUES($1,$2,$3,$4,$5,$6,\'active\') RETURNING id,created_at',[staffId,email,phone,name,pinHash,nfcHash])).rows[0];
+    const tm=(await c.query('INSERT INTO tenant_memberships(tenant_id,staff_id,role_code,status,is_active) VALUES($1,$2,$3,\'active\',true) RETURNING id',[req.auth.tenant_id,a.id,role])).rows[0];
+    await c.query('INSERT INTO outlet_memberships(tenant_id,outlet_id,tenant_membership_id,role_code,status,is_active) VALUES($1,$2,$3,$4,\'active\',true)',[req.auth.tenant_id,req.auth.outlet_id,tm.id,role]);
+    await writeAdminAudit(c,req,'staff.created',a.id,null,{name,role,status:'active',email,phone},{pinConfigured:true,nfcConfigured:Boolean(nfcHash)});
+    return {
+      id:a.id,
+      staff:{
+        id:a.id,
+        display_name:name,
+        email,
+        phone,
+        role_code:role,
+        status:'active',
+        is_active:true,
+        has_pin:true,
+        has_nfc:Boolean(nfcHash),
+        created_at:a.created_at,
+      },
+    };
   });
   res.status(201).json({ok:true,...created});
 }));
+app.patch('/api/admin/staff/:staffId/pin',authenticate,requireOwner,asyncRoute(async(req,res)=>{
+  const pin=String(req.body?.pin||'').trim();
+  if(!/^\d{4,8}$/.test(pin))return res.status(400).json({error:'PIN baru harus terdiri dari 4–8 digit angka.'});
+  const pinHash=await hashCredential(pin);
+  const result=await adminScoped(req,async c=>{
+    const member=await c.query('SELECT tm.id,a.display_name FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF a',[req.auth.tenant_id,req.params.staffId]);
+    if(!member.rowCount)return {status:404,error:'Staff tidak ditemukan pada tenant ini.'};
+    await c.query('UPDATE staff_accounts SET pin_hash=$1,updated_at=now() WHERE id=$2',[pinHash,req.params.staffId]);
+    await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);
+    await writeAdminAudit(c,req,'staff.pin_updated',req.params.staffId,null,{pinUpdated:true},{sessionsRevoked:true});
+    return {status:200};
+  });
+  if(result.status!==200)return res.status(result.status).json({error:result.error});
+  res.json({ok:true,id:req.params.staffId});
+}));
+app.patch('/api/admin/staff/:staffId/status',authenticate,requireOwner,asyncRoute(async(req,res)=>{
+  const rawStatus=req.body?.status!==undefined?String(req.body.status).trim().toLowerCase():undefined;
+  const rawIsActive=typeof req.body?.isActive==='boolean'?req.body.isActive:undefined;
+  const allowedStatuses=['active','suspended','disabled','blocked','inactive'];
+  if(rawStatus===undefined&&rawIsActive===undefined)return res.status(400).json({error:'Status akun wajib diisi (active / suspended / disabled).'});
+  if(rawStatus!==undefined&&!allowedStatuses.includes(rawStatus))return res.status(400).json({error:'Status akun tidak valid.'});
+  const nextActive=rawIsActive!==undefined?rawIsActive:rawStatus==='active';
+  const nextAccountStatus=nextActive?'active':(rawStatus&&rawStatus!=='active'?rawStatus:'suspended');
+  const nextMembershipStatus=nextActive?'active':'inactive';
+  if(req.params.staffId===req.auth.staff_id&&!nextActive)return res.status(400).json({error:'Tidak dapat memblokir akun Owner yang sedang digunakan.'});
+  const result=await adminScoped(req,async c=>{
+    const current=await c.query(`SELECT tm.id AS tenant_membership_id,tm.role_code,tm.status AS membership_status,
+      a.id,a.display_name,a.email,a.phone,a.status AS account_status,
+      (a.pin_hash IS NOT NULL) AS has_pin,(a.nfc_credential_hash IS NOT NULL) AS has_nfc,a.created_at
+      FROM tenant_memberships tm JOIN staff_accounts a ON a.id=tm.staff_id
+      LEFT JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$3
+      WHERE tm.tenant_id=$1 AND tm.staff_id=$2 FOR UPDATE OF tm,a`,[req.auth.tenant_id,req.params.staffId,req.auth.outlet_id]);
+    if(!current.rowCount)return {status:404,error:'Staff tidak ditemukan pada tenant/outlet ini.'};
+    const old=current.rows[0];
+    if(old.role_code==='owner'&&!nextActive){
+      const owners=await c.query("SELECT count(*)::int AS count FROM tenant_memberships tm JOIN outlet_memberships om ON om.tenant_id=tm.tenant_id AND om.tenant_membership_id=tm.id AND om.outlet_id=$2 AND om.status='active' WHERE tm.tenant_id=$1 AND tm.role_code='owner' AND tm.status='active'",[req.auth.tenant_id,req.auth.outlet_id]);
+      if(owners.rows[0].count<=1)return {status:409,error:'Tidak bisa memblokir satu-satunya Owner aktif di outlet.'};
+    }
+    await c.query('UPDATE staff_accounts SET status=$1,updated_at=now() WHERE id=$2',[nextAccountStatus,req.params.staffId]);
+    await c.query('UPDATE tenant_memberships SET status=$1,is_active=$2 WHERE tenant_id=$3 AND staff_id=$4',[nextMembershipStatus,nextActive,req.auth.tenant_id,req.params.staffId]);
+    await c.query('UPDATE outlet_memberships SET status=$1,is_active=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND tenant_membership_id=$5',[nextMembershipStatus,nextActive,req.auth.tenant_id,req.auth.outlet_id,old.tenant_membership_id]);
+    if(!nextActive){
+      await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);
+    }
+    await writeAdminAudit(c,req,'staff.status_updated',req.params.staffId,{status:old.account_status,isActive:old.account_status==='active'&&old.membership_status==='active'},{status:nextAccountStatus,isActive:nextActive},{sessionsRevoked:!nextActive});
+    const updatedStaff={
+      id:old.id,
+      display_name:old.display_name,
+      email:old.email,
+      phone:old.phone,
+      role_code:old.role_code,
+      status:nextAccountStatus,
+      is_active:nextActive,
+      has_pin:old.has_pin,
+      has_nfc:old.has_nfc,
+      created_at:old.created_at,
+    };
+    return {status:200,body:{ok:true,id:old.id,status:nextAccountStatus,isActive:nextActive,staff:updatedStaff}};
+  });
+  if(result.status!==200)return res.status(result.status).json({error:result.error});
+  res.json(result.body);
+}));
 app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const role=req.body?.role,status=req.body?.status;
-  if((role!==undefined&&!ADMIN_ROLES.includes(role))||(status!==undefined&&!['active','inactive'].includes(status))||(role===undefined&&status===undefined))return res.status(400).json({error:'Role atau status tidak valid.'});
+  if((role!==undefined&&!ADMIN_ROLES.includes(role))||(status!==undefined&&!['active','inactive','suspended','disabled','blocked'].includes(status))||(role===undefined&&status===undefined))return res.status(400).json({error:'Role atau status tidak valid.'});
   if(req.params.staffId===req.auth.staff_id&&status&&status!=='active')return res.status(400).json({error:'Owner tidak dapat menonaktifkan akun sendiri.'});
   if(req.params.staffId===req.auth.staff_id&&role&&role!=='owner')return res.status(400).json({error:'Owner tidak dapat menurunkan role akunnya sendiri.'});
   const result=await adminScoped(req,async c=>{
@@ -326,7 +441,14 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
       if(owners.rows[0].count<=1)return {status:409,error:'Tidak bisa menurunkan/nonaktifkan satu-satunya Owner aktif di outlet.'};
     }
     if(role!==undefined){await c.query('UPDATE tenant_memberships SET role_code=$1 WHERE id=$2',[role,old.id]);await c.query('UPDATE outlet_memberships SET role_code=$1 WHERE tenant_id=$2 AND outlet_id=$3 AND tenant_membership_id=$4',[role,req.auth.tenant_id,req.auth.outlet_id,old.id]);}
-    if(status!==undefined){await c.query('UPDATE staff_accounts SET status=$1 WHERE id=$2',[status,req.params.staffId]);await c.query('UPDATE tenant_memberships SET status=$1 WHERE id=$2',[status,old.id]);if(status!=='active')await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);}
+    if(status!==undefined){
+      const nextActive=status==='active';
+      const nextMembershipStatus=nextActive?'active':'inactive';
+      await c.query('UPDATE staff_accounts SET status=$1,updated_at=now() WHERE id=$2',[status,req.params.staffId]);
+      await c.query('UPDATE tenant_memberships SET status=$1,is_active=$2 WHERE id=$3',[nextMembershipStatus,nextActive,old.id]);
+      await c.query('UPDATE outlet_memberships SET status=$1,is_active=$2 WHERE tenant_id=$3 AND outlet_id=$4 AND tenant_membership_id=$5',[nextMembershipStatus,nextActive,req.auth.tenant_id,req.auth.outlet_id,old.id]);
+      if(!nextActive)await c.query('UPDATE staff_sessions SET revoked_at=now() WHERE tenant_id=$1 AND staff_id=$2 AND revoked_at IS NULL',[req.auth.tenant_id,req.params.staffId]);
+    }
     await writeAdminAudit(c,req,'staff.updated',req.params.staffId,{role:old.role_code,status:old.status},{role:nextRole,status:nextStatus});
     return {status:200};
   });
@@ -334,9 +456,9 @@ app.patch('/api/admin/staff/:staffId',authenticate,requireOwner,asyncRoute(async
   res.json({ok:true});
 }));
 app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,asyncRoute(async(req,res)=>{
-  const pin=req.body?.pin===undefined?null:String(req.body.pin),uid=req.body?.nfcUid===undefined?null:String(req.body.nfcUid).trim().toUpperCase(),clearNfc=req.body?.clearNfc===true;
+  const pin=req.body?.pin===undefined?null:String(req.body.pin).trim(),uid=req.body?.nfcUid===undefined?null:String(req.body.nfcUid).trim().toUpperCase(),clearNfc=req.body?.clearNfc===true;
   if(pin===null&&uid===null&&!clearNfc)return res.status(400).json({error:'PIN baru atau NFC UID wajib diisi.'});
-  if(pin!==null&&!/^\d{4}$/.test(pin))return res.status(400).json({error:'PIN harus 4–8 digit.'});
+  if(pin!==null&&!/^\d{4,8}$/.test(pin))return res.status(400).json({error:'PIN harus 4–8 digit.'});
   if(uid!==null&&(!uid||uid.length>200))return res.status(400).json({error:'NFC UID tidak valid.'});
   const pinHash=pin===null?null:await hashCredential(pin),nfcHash=uid===null?null:await hashCredential(uid);
   const result=await adminScoped(req,async c=>{
@@ -344,7 +466,7 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
     if(!member.rowCount)return false;
     const tenantCount=await c.query('SELECT count(DISTINCT tenant_id)::int AS count FROM tenant_memberships WHERE staff_id=$1',[req.params.staffId]);
     if(tenantCount.rows[0].count>1)return 'multi';
-    const sets=[],values=[req.params.staffId];
+    const sets=['updated_at=now()'],values=[req.params.staffId];
     if(pinHash){values.push(pinHash);sets.push('pin_hash=$'+values.length);}
     if(nfcHash){values.push(nfcHash);sets.push('nfc_credential_hash=$'+values.length);}
     if(clearNfc)sets.push('nfc_credential_hash=NULL');

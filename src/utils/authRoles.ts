@@ -30,6 +30,44 @@ export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
   },
 ];
 
+export function getRoleLabel(role: UserRole): string {
+  switch (role) {
+    case 'owner':
+      return 'Owner / Executive';
+    case 'manager':
+      return 'Outlet Manager';
+    case 'cashier':
+      return 'Kasir Front-of-House';
+    case 'waiter':
+      return 'Waiter / Server';
+    case 'kitchen':
+      return 'Kitchen & Bar KDS';
+    case 'finance':
+      return 'Finance & Tax PB1';
+    default:
+      return role;
+  }
+}
+
+export function getRoleAvatarColor(role: UserRole): string {
+  switch (role) {
+    case 'owner':
+      return 'bg-amber-500';
+    case 'manager':
+      return 'bg-violet-600';
+    case 'cashier':
+      return 'bg-emerald-600';
+    case 'waiter':
+      return 'bg-sky-600';
+    case 'kitchen':
+      return 'bg-orange-600';
+    case 'finance':
+      return 'bg-indigo-600';
+    default:
+      return 'bg-slate-600';
+  }
+}
+
 export interface AuthResult {
   success: boolean;
   staff?: StaffAccount;
@@ -37,7 +75,7 @@ export interface AuthResult {
 }
 
 /**
- * Authenticate staff using numeric PIN (4 digits).
+ * Authenticate staff using numeric PIN (4-8 digits).
  */
 export function authenticateByPin(
   pin: string,
@@ -45,16 +83,23 @@ export function authenticateByPin(
 ): AuthResult {
   const cleanPin = pin.trim();
   if (!cleanPin) {
-    return { success: false, error: 'Masukkan PIN 4 digit Anda.' };
+    return { success: false, error: 'Masukkan PIN 4–8 digit Anda.' };
   }
 
-  if (cleanPin.length !== 4 || !/^\d{4}$/.test(cleanPin)) {
-    return { success: false, error: 'PIN harus tepat 4 digit angka.' };
+  if (!/^\d{4,8}$/.test(cleanPin)) {
+    return { success: false, error: 'PIN harus terdiri dari 4–8 digit angka.' };
   }
 
   const found = staffList.find((s) => s.pin === cleanPin);
   if (!found) {
     return { success: false, error: 'PIN tidak terdaftar. Periksa kembali PIN Anda.' };
+  }
+
+  if ((found.status && found.status !== 'active') || found.isActive === false) {
+    return {
+      success: false,
+      error: `Akun ${found.name} sedang diblokir atau dinonaktifkan. Hubungi Owner.`,
+    };
   }
 
   return { success: true, staff: found };
@@ -72,9 +117,16 @@ export function authenticateByNfc(
     return { success: false, error: 'NFC Tag tidak terdeteksi.' };
   }
 
-  const found = staffList.find((s) => s.nfcTagUid.toUpperCase() === cleanUid);
+  const found = staffList.find((s) => (s.nfcTagUid || '').toUpperCase() === cleanUid);
   if (!found) {
     return { success: false, error: 'Kartu NFC tidak dikenali oleh sistem resto.' };
+  }
+
+  if ((found.status && found.status !== 'active') || found.isActive === false) {
+    return {
+      success: false,
+      error: `Akun ${found.name} sedang diblokir atau dinonaktifkan. Hubungi Owner.`,
+    };
   }
 
   return { success: true, staff: found };

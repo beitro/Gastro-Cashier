@@ -10,8 +10,10 @@ import {
   PaymentFlowMode,
   StaffAccount,
   PettyCashEntry,
+  UserRole,
 } from './types/pos';
 import { INITIAL_TABLES, MENU_ITEMS, RAW_MATERIALS } from './data/initialData';
+import { DEFAULT_STAFF_ACCOUNTS, getRoleAvatarColor, getRoleLabel } from './utils/authRoles';
 import {
   calculateOrderTotals,
   generatePrintTickets,
@@ -47,6 +49,7 @@ const STORAGE_KEY_TICKETS = 'resto_pos_tickets_v1';
 const STORAGE_KEY_MATERIALS = 'resto_pos_materials_v1';
 const STORAGE_KEY_PAYMENT_MODE = 'resto_pos_payment_mode_v1';
 const STORAGE_KEY_STAFF = 'resto_pos_staff_v1';
+const STORAGE_KEY_STAFF_ACCOUNTS = 'resto_pos_staff_accounts_v1';
 const STORAGE_KEY_PETTY_CASH = 'resto_pos_petty_cash_v1';
 const STORAGE_KEY_MENU_STOCK = 'resto_pos_menu_stock_v1';
 const STORAGE_KEY_CANCELLATIONS = 'resto_pos_cancellation_requests_v1';
@@ -509,7 +512,18 @@ export default function App() {
     return 'payment_last';
   });
 
-  // Staff Authentication & Role State
+  // Staff Directory & Authentication State
+  const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_STAFF_ACCOUNTS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_STAFF_ACCOUNTS;
+  });
+
   const [currentStaff, setCurrentStaff] = useState<StaffAccount | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_STAFF);
@@ -517,6 +531,86 @@ export default function App() {
     } catch {}
     return null;
   });
+
+  const handleCreateLocalStaff = (payload: {
+    displayName: string;
+    roleCode: UserRole;
+    pin: string;
+    email?: string;
+    phone?: string;
+    nfcUid?: string;
+  }): StaffAccount => {
+    const created: StaffAccount & { email?: string; phone?: string; createdAt?: string } = {
+      id: `staff-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+      name: payload.displayName,
+      role: payload.roleCode,
+      pin: payload.pin,
+      nfcTagUid: payload.nfcUid || `NFC-${payload.roleCode.toUpperCase()}-${payload.pin.slice(0, 2)}`,
+      avatarColor: getRoleAvatarColor(payload.roleCode),
+      roleLabel: getRoleLabel(payload.roleCode),
+      status: 'active',
+      isActive: true,
+      email: payload.email,
+      phone: payload.phone,
+      createdAt: new Date().toISOString(),
+    };
+    setStaffAccounts((prev) => {
+      const next = [...prev, created];
+      try {
+        localStorage.setItem(STORAGE_KEY_STAFF_ACCOUNTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    audit('staff.created', 'allow', `Karyawan baru dibuat: ${payload.displayName} (${payload.roleCode})`, currentStaff);
+    return created;
+  };
+
+  const handleUpdateLocalStaffPin = (staffId: string, pin: string) => {
+    setStaffAccounts((prev) => {
+      const next = prev.map((acc) => (acc.id === staffId ? { ...acc, pin } : acc));
+      try {
+        localStorage.setItem(STORAGE_KEY_STAFF_ACCOUNTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    if (currentStaff?.id === staffId) {
+      setCurrentStaff((prev) => (prev ? { ...prev, pin } : prev));
+    }
+    audit('staff.pin_updated', 'allow', `PIN karyawan ${staffId} diperbarui`, currentStaff);
+  };
+
+  const handleUpdateLocalStaffStatus = (staffId: string, status: 'active' | 'suspended') => {
+    const isActive = status === 'active';
+    setStaffAccounts((prev) => {
+      const next = prev.map((acc) =>
+        acc.id === staffId
+          ? {
+              ...acc,
+              status: (isActive ? 'active' : 'blocked') as 'active' | 'blocked',
+              isActive,
+              memberships: (acc.memberships || []).map((m) => ({
+                ...m,
+                status: (isActive ? 'active' : 'blocked') as 'active' | 'blocked',
+              })),
+            }
+          : acc
+      );
+      try {
+        localStorage.setItem(STORAGE_KEY_STAFF_ACCOUNTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    if (!isActive && currentStaff?.id === staffId) {
+      setCurrentStaff(null);
+      setIsLocked(true);
+    }
+    audit(
+      'staff.status_updated',
+      'allow',
+      `Status akun karyawan ${staffId} diubah menjadi ${status}`,
+      currentStaff
+    );
+  };
 
   const [apiMenu, setApiMenu] = useState<Record<string, any>[]>([]);
 
@@ -532,7 +626,7 @@ export default function App() {
 
   useEffect(() => {
     if (!currentStaff) return;
-    if (!getApiToken()) { setCurrentStaff(null); return; }
+    if (!getApiToken()) return;
     let cancelled = false;
     loadPosSnapshot().then(snapshot => {
       if (cancelled) return;
@@ -651,10 +745,11 @@ export default function App() {
       localStorage.setItem(STORAGE_KEY_MENU_STOCK, JSON.stringify(menuStock));
       localStorage.setItem(STORAGE_KEY_CANCELLATIONS, JSON.stringify(cancellationRequests));
       localStorage.setItem(STORAGE_KEY_PAYMENT_MODE, paymentFlowMode);
+      localStorage.setItem(STORAGE_KEY_STAFF_ACCOUNTS, JSON.stringify(staffAccounts));
       if (currentStaff) localStorage.setItem(STORAGE_KEY_STAFF, JSON.stringify(currentStaff));
       localStorage.setItem(STORAGE_KEY_PETTY_CASH, JSON.stringify(pettyCashEntries));
     } catch {}
-  }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, menuStock, cancellationRequests, paymentFlowMode, currentStaff, pettyCashEntries]);
+  }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, menuStock, cancellationRequests, paymentFlowMode, staffAccounts, currentStaff, pettyCashEntries]);
 
   // RESET DEMO DATA
   const handleResetData = () => {
@@ -671,6 +766,7 @@ export default function App() {
     menuStockRef.current = initialMenuStock;
     setMenuStock(initialMenuStock);
     setCancellationRequests([]);
+    setStaffAccounts(DEFAULT_STAFF_ACCOUNTS);
     setPaymentFlowMode('payment_last');
     setPettyCashEntries([
       {
@@ -702,7 +798,58 @@ export default function App() {
     table: Table; guestCount: number; waiterName: string; newItems: OrderItem[]; batchNumber: number;
   }) => {
     const { table, guestCount, waiterName } = params;
-    if (!currentStaff || !canOperatePOS(currentStaff) || !getApiToken()) { window.alert('Sesi API POS tidak aktif. Silakan login ulang.'); return; }
+    if (!currentStaff || !canOperatePOS(currentStaff)) {
+      window.alert('Akun Anda tidak memiliki izin operasi POS.');
+      return;
+    }
+    if (!getApiToken()) {
+      if (!reserveMenuStock(params.newItems)) return;
+      const sessionRes = createSession(table, currentStaff, guestCount, activeTransactions);
+      if (!sessionRes.ok) {
+        window.alert(sessionRes.message);
+        return;
+      }
+      const updatedWithBatch = appendBatch(sessionRes.transaction, params.newItems, currentStaff);
+      const totals = calculateOrderTotals(updatedWithBatch.allCurrentItems, 0);
+      const updatedTx: Transaction = {
+        ...updatedWithBatch,
+        guestCount,
+        waiterName: waiterName || currentStaff.name,
+        ...totals,
+      };
+      const stampedItems = updatedTx.batches[updatedTx.batches.length - 1]?.items || params.newItems;
+      const newTickets = generatePrintTickets({
+        transaction: updatedTx,
+        batchItems: stampedItems,
+        batchNumber: stampedItems[0]?.batchNumber || params.batchNumber,
+        type: 'order',
+      });
+      setActiveTransactions((prev) => ({ ...prev, [updatedTx.id]: updatedTx }));
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === table.id
+            ? {
+                ...t,
+                status: 'occupied',
+                currentTransactionId: updatedTx.id,
+                guestCount,
+                openedAt: updatedTx.openedAt,
+                waiterName: updatedTx.waiterName,
+              }
+            : t
+        )
+      );
+      setRawMaterials((prev) => deductRecipeMaterials(prev, params.newItems, MENU_ITEMS));
+      setAllPrintTickets((prev) => [...newTickets, ...prev]);
+      setOrderModalTable(null);
+      setPrinterModalTickets(newTickets);
+      setShowPrinterModal(true);
+      if (soundEnabled) {
+        sounds.playPrinterSound();
+        setTimeout(() => sounds.playBellSound(), 350);
+      }
+      return;
+    }
     if (!apiMenu.length) { window.alert('Katalog API belum dimuat. Pesanan tidak dikirim.'); return; }
     try {
       let sessionId = table.currentTransactionId;
@@ -742,8 +889,19 @@ export default function App() {
     window.alert('Payment First sementara dinonaktifkan sampai backend mendukung pembayaran parsial dan sesi layanan setelah pelunasan. Gunakan Payment Last agar pembayaran tercatat atomik di database.');
   };
 
-  // KDS Dapur & Barista Cooking Status Management — persisted by the API.
+  // KDS Dapur & Barista Cooking Status Management — persisted by the API (or local fallback).
   const handleUpdateCookingStatus = async (transactionId: string, itemId: string, status: CookingStatus) => {
+    if (!getApiToken()) {
+      setActiveTransactions((prev) => {
+        const tx = prev[transactionId];
+        if (!tx) return prev;
+        return {
+          ...prev,
+          [transactionId]: updateTransactionItemCookingStatus(tx, itemId, status),
+        };
+      });
+      return;
+    }
     try {
       await updateApiOrderItem(transactionId, itemId, { cookingStatus: status });
       await refreshApiSnapshot();
@@ -770,6 +928,15 @@ export default function App() {
     const changed = handedOff.allCurrentItems.filter((item, index) =>
       item.cookingStatus !== tx.allCurrentItems[index]?.cookingStatus
     );
+    if (!getApiToken()) {
+      setActiveTransactions((prev) => ({ ...prev, [transactionId]: handedOff }));
+      if (options?.openCheckerTableId) {
+        setCheckerModalTableId(options.openCheckerTableId);
+        setActiveTab('checker');
+        setShowCheckerModal(true);
+      }
+      return;
+    }
     try {
       await Promise.all(changed.map(item =>
         updateApiOrderItem(transactionId, item.id, { cookingStatus: 'handed_off' })
@@ -807,8 +974,8 @@ export default function App() {
   };
 
   const handleApproveCancellation = async (requestId: string) => {
-    if (!canApproveCancellation(currentStaff) || !getApiToken()) {
-      window.alert('Hanya Manager atau Owner dengan sesi API aktif yang dapat menyetujui pembatalan.');
+    if (!canApproveCancellation(currentStaff)) {
+      window.alert('Hanya Manager atau Owner yang dapat menyetujui pembatalan.');
       return;
     }
     const request = cancellationRequests.find((entry) => entry.id === requestId);
@@ -817,6 +984,25 @@ export default function App() {
     const item = tx?.allCurrentItems.find((entry) => entry.id === request.itemId);
     if (!tx || !item || item.isServed || ['cooking', 'ready', 'handed_off'].includes(item.cookingStatus || '')) {
       window.alert('Item sudah diproses/tersaji atau tidak lagi aktif. Stok tidak dikembalikan.');
+      setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
+      return;
+    }
+    if (!getApiToken()) {
+      const remainingItems = tx.allCurrentItems.filter((entry) => entry.id !== item.id);
+      const updatedTx = recalculateTransactionTotals({
+        ...tx,
+        allCurrentItems: remainingItems,
+        batches: tx.batches.map((b) => ({
+          ...b,
+          items: b.items.filter((entry) => entry.id !== item.id),
+        })),
+      });
+      setActiveTransactions((prev) => ({ ...prev, [tx.id]: updatedTx }));
+      setMenuStock((prev) => ({
+        ...prev,
+        [item.menuItemId]: (prev[item.menuItemId] ?? 0) + item.quantity,
+      }));
+      audit('order_item.cancelled', 'allow', `Pembatalan item ${request.itemName} disetujui (${request.reason})`, currentStaff);
       setCancellationRequests((prev) => prev.filter((entry) => entry.id !== requestId));
       return;
     }
@@ -841,10 +1027,25 @@ export default function App() {
     );
   };
 
-  // STEP 5: TOGGLE SERVED ITEM (persisted by the API).
+  // STEP 5: TOGGLE SERVED ITEM (persisted by the API or local fallback).
   const handleToggleItemServed = async (transactionId: string, itemId: string) => {
     const item = activeTransactions[transactionId]?.allCurrentItems.find(entry => entry.id === itemId);
     if (!item) return;
+    if (!getApiToken()) {
+      setActiveTransactions((prev) => {
+        const tx = prev[transactionId];
+        if (!tx) return prev;
+        return {
+          ...prev,
+          [transactionId]: toggleServedStatusInTransaction(tx, itemId),
+        };
+      });
+      setAllPrintTickets(prev => prev.map(ticket => ({
+        ...ticket,
+        items: ticket.items.map(entry => entry.id === itemId ? { ...entry, isServed: !item.isServed } : entry),
+      })));
+      return;
+    }
     try {
       await updateApiOrderItem(transactionId, itemId, { isServed: !item.isServed });
       await refreshApiSnapshot();
@@ -859,6 +1060,17 @@ export default function App() {
 
   // Mark all served for a table (persist each item; server remains authoritative).
   const handleMarkAllServed = async (transactionId: string) => {
+    if (!getApiToken()) {
+      setActiveTransactions((prev) => {
+        const tx = prev[transactionId];
+        if (!tx) return prev;
+        return {
+          ...prev,
+          [transactionId]: markAllServedInTransaction(tx),
+        };
+      });
+      return;
+    }
     const items = activeTransactions[transactionId]?.allCurrentItems || [];
     try {
       await Promise.all(items.filter(item => !item.isServed).map(item =>
@@ -871,8 +1083,19 @@ export default function App() {
     }
   };
 
-  // Mark handed-off items served for a table (persisted by the API).
+  // Mark handed-off items served for a table (persisted by the API or local fallback).
   const handleMarkHandedOffServed = async (transactionId: string) => {
+    if (!getApiToken()) {
+      setActiveTransactions((prev) => {
+        const tx = prev[transactionId];
+        if (!tx) return prev;
+        return {
+          ...prev,
+          [transactionId]: markHandedOffItemsServedInTransaction(tx),
+        };
+      });
+      return;
+    }
     const items = activeTransactions[transactionId]?.allCurrentItems.filter(isItemWaitingForWaiter) || [];
     try {
       await Promise.all(items.map(item =>
@@ -895,9 +1118,55 @@ export default function App() {
     changeAmount?: number;
     discountAmount: number;
   }) => {
-    const { transactionId, tableId, paymentMethod, cashGiven, cardBank, discountAmount } = params;
+    const { transactionId, tableId, paymentMethod, cashGiven, cardBank, changeAmount, discountAmount } = params;
     const currentTx = activeTransactions[transactionId];
-    if (!currentTx || !canOperatePOS(currentStaff) || !getApiToken()) return;
+    if (!currentTx || !canOperatePOS(currentStaff)) return;
+
+    if (!getApiToken()) {
+      const completedTx: Transaction = recalculateTransactionTotals({
+        ...currentTx,
+        status: 'completed',
+        closedAt: new Date().toISOString(),
+        paymentMethod,
+        cashGiven,
+        cardBank,
+        changeAmount,
+        discountAmount,
+      });
+      const receiptTicket = generatePrintTickets({
+        transaction: completedTx,
+        batchItems: completedTx.allCurrentItems,
+        batchNumber: completedTx.batches.length,
+        type: 'settlement',
+      });
+      setActiveTransactions((prev) => {
+        const copy = { ...prev };
+        delete copy[transactionId];
+        return copy;
+      });
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === tableId
+            ? {
+                ...t,
+                status: 'available',
+                currentTransactionId: undefined,
+                guestCount: undefined,
+                openedAt: undefined,
+                waiterName: undefined,
+              }
+            : t
+        )
+      );
+      setSettledTransactions((prev) => [completedTx, ...prev]);
+      setAllPrintTickets((prev) => [...receiptTicket, ...prev]);
+      setPaymentModalTable(null);
+      setPrinterModalTickets(receiptTicket);
+      setShowPrinterModal(true);
+      if (soundEnabled) sounds.playPrinterSound();
+      return;
+    }
+
     try {
       const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven, cardBank);
       if (payment.status !== 'settled') {
@@ -1032,7 +1301,14 @@ export default function App() {
       {/* Main Dynamic View: Owner Dashboard, Finance Workspace, or Cashier Floor Plan */}
       <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {activeTab === 'admin' && currentStaff?.role === 'owner' ? (
-          <StaffAdminView currentStaff={currentStaff} onLockScreen={handleLockScreen} />
+          <StaffAdminView
+            currentStaff={currentStaff}
+            onLockScreen={handleLockScreen}
+            staffAccounts={staffAccounts}
+            onCreateLocalStaff={handleCreateLocalStaff}
+            onUpdateLocalStaffPin={handleUpdateLocalStaffPin}
+            onUpdateLocalStaffStatus={handleUpdateLocalStaffStatus}
+          />
         ) : activeTab === 'owner' && currentStaff?.role === 'owner' ? (
           <OwnerDashboardView
             currentStaff={currentStaff}
@@ -1071,6 +1347,10 @@ export default function App() {
             onOpenOrder={async (table) => {
               const access = assertTableAccess(currentStaff, table, activeTransactions);
               if (!access.ok || !currentStaff) { if (!access.ok) window.alert(access.message); return; }
+              if (!getApiToken()) {
+                setOrderModalTable(table);
+                return;
+              }
               try {
                 let sessionId = table.currentTransactionId;
                 if (!sessionId) {
@@ -1109,7 +1389,7 @@ export default function App() {
       {orderModalTable && (
         <OrderModal
           table={orderModalTable}
-          menuItems={mapApiMenuToMenuItems(apiMenu)}
+          menuItems={apiMenu.length > 0 ? mapApiMenuToMenuItems(apiMenu) : MENU_ITEMS}
           existingTransaction={
             orderModalTable.currentTransactionId
               ? activeTransactions[orderModalTable.currentTransactionId]
@@ -1279,6 +1559,7 @@ export default function App() {
       {(isLocked || !currentStaff) && (
         <LoginModal
           currentStaff={currentStaff}
+          staffAccounts={staffAccounts}
           onLoginSuccess={handleLoginSuccess}
           canCancel={!!currentStaff}
           onCancel={() => setIsLocked(false)}

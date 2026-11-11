@@ -88,9 +88,18 @@ try {
   });
   stepsRun.push('db-provision-runtime-role.mjs');
 
-  const emergencySql = await readFile(path.join(rootDir, 'db/migrations/005_emergency_staff_readonly.sql'), 'utf8');
-  await client.query(emergencySql);
-  stepsRun.push('005_emergency_staff_readonly.sql');
+  if (process.env.EMERGENCY_STAFF_READONLY === 'true') {
+    const emergencySql = await readFile(path.join(rootDir, 'db/migrations/005_emergency_staff_readonly.sql'), 'utf8');
+    await client.query(emergencySql);
+    stepsRun.push('005_emergency_staff_readonly.sql');
+  } else {
+    const ownerStaffManagementSql = await readFile(
+      path.join(rootDir, 'db/migrations/007_enable_owner_staff_management.sql'),
+      'utf8'
+    );
+    await client.query(ownerStaffManagementSql);
+    stepsRun.push('007_enable_owner_staff_management.sql');
+  }
 
   console.log(
     JSON.stringify(

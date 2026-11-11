@@ -303,3 +303,65 @@ export function mapApiMenuToMenuItems(menu: ApiRow[]): MenuItem[] {
     description: row.description || undefined,
   }));
 }
+
+export interface AdminStaffRecord {
+  id: string;
+  display_name: string;
+  email: string | null;
+  phone: string | null;
+  role_code: string;
+  status: string;
+  is_active?: boolean;
+  has_pin: boolean;
+  has_nfc: boolean;
+  created_at: string;
+}
+
+export async function fetchAdminStaff(): Promise<AdminStaffRecord[]> {
+  const rows = await request<AdminStaffRecord[]>('/api/admin/staff');
+  if (!Array.isArray(rows)) throw new Error('Format direktori staff dari server tidak valid.');
+  return rows;
+}
+
+export async function createAdminStaff(payload: {
+  displayName: string;
+  roleCode: string;
+  pin: string;
+  email?: string;
+  phone?: string;
+  nfcUid?: string;
+}): Promise<{ ok: boolean; id: string; staff?: AdminStaffRecord }> {
+  return request<{ ok: boolean; id: string; staff?: AdminStaffRecord }>('/api/admin/staff', {
+    method: 'POST',
+    body: JSON.stringify({
+      displayName: payload.displayName,
+      name: payload.displayName,
+      roleCode: payload.roleCode,
+      role: payload.roleCode,
+      pin: payload.pin,
+      email: payload.email || undefined,
+      phone: payload.phone || undefined,
+      nfcUid: payload.nfcUid || undefined,
+    }),
+  });
+}
+
+export async function updateAdminStaffPin(staffId: string, pin: string): Promise<{ ok: boolean; id: string }> {
+  return request<{ ok: boolean; id: string }>('/api/admin/staff/' + encodeURIComponent(staffId) + '/pin', {
+    method: 'PATCH',
+    body: JSON.stringify({ pin }),
+  });
+}
+
+export async function updateAdminStaffStatus(
+  staffId: string,
+  status: 'active' | 'suspended'
+): Promise<{ ok: boolean; id: string; status: string; isActive: boolean; staff?: AdminStaffRecord }> {
+  return request<{ ok: boolean; id: string; status: string; isActive: boolean; staff?: AdminStaffRecord }>(
+    '/api/admin/staff/' + encodeURIComponent(staffId) + '/status',
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ status, isActive: status === 'active' }),
+    }
+  );
+}
