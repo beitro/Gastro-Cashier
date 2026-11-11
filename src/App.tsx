@@ -690,7 +690,6 @@ export default function App() {
   const [showPrinterModal, setShowPrinterModal] = useState(false);
   const [printerModalTickets, setPrinterModalTickets] = useState<PrintTicket[]>([]);
   const [showSalesModal, setShowSalesModal] = useState(false);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showSheetsModal, setShowSheetsModal] = useState(false);
   const [sheetsModalMode, setSheetsModalMode] = useState<'create' | 'sales' | 'inventory'>('create');
 
@@ -756,54 +755,35 @@ export default function App() {
     } catch {}
   }, [tables, activeTransactions, settledTransactions, allPrintTickets, rawMaterials, menuStock, cancellationRequests, paymentFlowMode, staffAccounts, currentStaff, pettyCashEntries]);
 
-  // RESET DEMO DATA
-  const handleResetData = () => {
-    setShowResetConfirm(true);
-  };
-
-  const confirmResetData = async () => {
-    localStorage.clear();
-    if (getApiToken()) {
-      try {
+  // REFRESH DATA & SINKRONISASI API
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefreshData = async () => {
+    sounds.playTapSound();
+    setIsRefreshing(true);
+    try {
+      if (getApiToken()) {
         await refreshApiSnapshot();
-        setShowResetConfirm(false);
         if (soundEnabled) sounds.playBellSound();
-        return;
-      } catch {}
+      } else {
+        // Fallback jika mode demo tanpa koneksi API
+        setTables(INITIAL_TABLES);
+        setActiveTransactions(INITIAL_TRANSACTIONS);
+        setSettledTransactions([]);
+        setAllPrintTickets([]);
+        setRawMaterials(RAW_MATERIALS);
+        const initialMenuStock = Object.fromEntries(MENU_ITEMS.map((item) => [item.id, item.stock]));
+        menuStockRef.current = initialMenuStock;
+        setMenuStock(initialMenuStock);
+        setCancellationRequests([]);
+        setStaffAccounts(DEFAULT_STAFF_ACCOUNTS);
+        setPaymentFlowMode('payment_last');
+        if (soundEnabled) sounds.playBellSound();
+      }
+    } catch (err) {
+      window.alert('Gagal menyinkronkan data: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    } finally {
+      setIsRefreshing(false);
     }
-    setTables(INITIAL_TABLES);
-    setActiveTransactions(INITIAL_TRANSACTIONS);
-    setSettledTransactions([]);
-    setAllPrintTickets([]);
-    setRawMaterials(RAW_MATERIALS);
-    const initialMenuStock = Object.fromEntries(MENU_ITEMS.map((item) => [item.id, item.stock]));
-    menuStockRef.current = initialMenuStock;
-    setMenuStock(initialMenuStock);
-    setCancellationRequests([]);
-    setStaffAccounts(DEFAULT_STAFF_ACCOUNTS);
-    setPaymentFlowMode('payment_last');
-    setPettyCashEntries([
-      {
-        id: 'pc-init-1',
-        timestamp: new Date(Date.now() - 120 * 60000).toISOString(),
-        description: 'Isi Ulang Gas LPG 12kg Dapur',
-        category: 'operasional',
-        amount: 45000,
-        recordedBy: 'Ratna Dewi',
-        receiptNumber: 'B-8821',
-      },
-      {
-        id: 'pc-init-2',
-        timestamp: new Date(Date.now() - 60 * 60000).toISOString(),
-        description: 'Es Kristal Balok Tambahan Bar Station',
-        category: 'bahan_darurat',
-        amount: 25000,
-        recordedBy: 'Ratna Dewi',
-        receiptNumber: 'B-8839',
-      },
-    ]);
-    setShowResetConfirm(false);
-    if (soundEnabled) sounds.playBellSound();
   };
 
   // FLOW 1 (EXISTING): PAYMENT LAST (BAYAR BELAKANG) — OPEN TABLE & SEND TO KITCHEN/BAR
@@ -865,9 +845,20 @@ export default function App() {
     }
     if (!apiMenu.length) { window.alert('Katalog API belum dimuat. Pesanan tidak dikirim.'); return; }
     try {
-      let sessionId = table.currentTransactionId;
+      let targetTable = table;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetTable.id);
+      if (!isUuid) {
+        const snap = await loadPosSnapshot();
+        const matched = snap.tables.find(t => t.tableNumber === targetTable.tableNumber);
+        if (matched) {
+          targetTable = matched;
+          setTables(snap.tables);
+          setActiveTransactions(snap.transactions);
+        }
+      }
+      let sessionId = targetTable.currentTransactionId;
       if (!sessionId) {
-        const created = await openApiSession(table, guestCount, currentStaff.id);
+        const created = await openApiSession(targetTable, guestCount, currentStaff.id);
         sessionId = created.id;
       }
       if (!sessionId) throw new Error('Sesi meja tidak memiliki ID yang valid.');
@@ -1420,14 +1411,25 @@ export default function App() {
                 return;
               }
               try {
-                let sessionId = table.currentTransactionId;
+                let targetTable = table;
+                const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetTable.id);
+                if (!isUuid) {
+                  const snap = await loadPosSnapshot();
+                  const matched = snap.tables.find(t => t.tableNumber === targetTable.tableNumber);
+                  if (matched) {
+                    targetTable = matched;
+                    setTables(snap.tables);
+                    setActiveTransactions(snap.transactions);
+                  }
+                }
+                let sessionId = targetTable.currentTransactionId;
                 if (!sessionId) {
-                  const created = await openApiSession(table, table.guestCount || Math.min(table.capacity, 2), currentStaff.id);
+                  const created = await openApiSession(targetTable, targetTable.guestCount || Math.min(targetTable.capacity, 2), currentStaff.id);
                   sessionId = created.id;
                 }
                 if (!sessionId) throw new Error('Sesi meja tidak memiliki ID yang valid.');
                 const snapshot = await loadPosSnapshot();
-                const opened = snapshot.tables.find(t => t.id === table.id);
+                const opened = snapshot.tables.find(t => t.id === targetTable.id || t.tableNumber === targetTable.tableNumber);
                 if (!opened || !snapshot.transactions[sessionId]) throw new Error('Sesi meja tidak ditemukan setelah dibuat.');
                 setTables(snapshot.tables);
                 setActiveTransactions(snapshot.transactions);
@@ -1580,47 +1582,6 @@ export default function App() {
           initialMode={sheetsModalMode}
           onClose={() => setShowSheetsModal(false)}
         />
-      )}
-
-      {/* CLAYMORPHISM RESET DEMO CONFIRMATION MODAL */}
-      {showResetConfirm && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-900/35 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setShowResetConfirm(false)}
-        >
-          <div
-            className="clay-modal p-6 sm:p-7 max-w-md w-full space-y-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div>
-              <span className="text-xs font-extrabold uppercase tracking-wider text-amber-700 block">
-                Konfirmasi Sistem
-              </span>
-              <h3 className="text-xl font-black text-slate-900 mt-1">
-                Reset Data Operasional Demo?
-              </h3>
-              <p className="text-sm text-slate-600 mt-2 leading-relaxed">
-                Seluruh status 36 meja, antrean pesanan aktif, stok bahan baku BOM, dan riwayat struk akan dikembalikan ke kondisi awal.
-              </p>
-            </div>
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowResetConfirm(false)}
-                className="clay-btn-neutral min-h-[48px] px-5 py-2.5 text-sm font-extrabold whitespace-nowrap cursor-pointer"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={confirmResetData}
-                className="clay-btn-rose min-h-[48px] px-5 py-2.5 text-sm font-extrabold whitespace-nowrap cursor-pointer"
-              >
-                Ya, Reset Data
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* NFC / PIN STAFF LOGIN MODAL */}

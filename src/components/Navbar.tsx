@@ -6,7 +6,7 @@ import {
   BarChart3,
   Volume2,
   VolumeX,
-  RotateCcw,
+  RefreshCw,
   Flame,
   Boxes,
   Download,
@@ -327,11 +327,11 @@ export const Navbar: React.FC<NavbarProps> = ({
         <button
           type="button"
           onClick={onResetData}
-          title="Reset Data Demo"
-          aria-label="Reset Data Demo"
-          className="min-w-[42px] min-h-[42px] clay-btn-neutral flex items-center justify-center text-slate-700 hover:text-rose-700 cursor-pointer shrink-0"
+          title="Refresh Data & Sinkronisasi API"
+          aria-label="Refresh Data & Sinkronisasi API"
+          className="min-w-[42px] min-h-[42px] clay-btn-neutral flex items-center justify-center text-slate-700 hover:text-emerald-700 cursor-pointer shrink-0"
         >
-          <RotateCcw className="w-[18px] h-[18px] stroke-[2]" />
+          <RefreshCw className="w-[18px] h-[18px] stroke-[2]" />
         </button>
       </div>
     </header>

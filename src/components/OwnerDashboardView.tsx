@@ -8,7 +8,7 @@ import {
   Store,
   Boxes,
   FileSpreadsheet,
-  RotateCcw,
+  RefreshCw,
   Lock,
   ArrowRight,
   Flame,
@@ -94,11 +94,11 @@ export const OwnerDashboardView: React.FC<OwnerDashboardViewProps> = ({
           <button
             type="button"
             onClick={onResetData}
-            className="min-h-[42px] px-3 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer clay-btn-neutral text-slate-700 hover:text-rose-700"
-            title="Reset Database Demo"
+            className="min-h-[42px] px-3 py-2 text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer clay-btn-neutral text-slate-700 hover:text-emerald-700"
+            title="Refresh Data & Sinkronisasi API"
           >
-            <RotateCcw className="w-4 h-4" />
-            <span className="hidden lg:inline">Reset Demo</span>
+            <RefreshCw className="w-4 h-4" />
+            <span className="hidden lg:inline">Refresh Data</span>
           </button>
 
           <button
