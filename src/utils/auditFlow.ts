@@ -87,8 +87,12 @@ export function canOperatePOS(staff: StaffAccount | null): boolean {
 export function canApproveCancellation(staff: StaffAccount | null): boolean { return !!staff && (staff.role === 'owner' || staff.role === 'manager') && staff.status !== 'blocked' && staff.status !== 'inactive'; }
 export function isSameOutlet(staff: StaffAccount | null, table: Table): boolean {
   if (!staff) return false;
-  if (staff.role === 'owner') return true;
-  return (staff.outletId || DEFAULT_OUTLET_ID) === (table.outletId || DEFAULT_OUTLET_ID);
+  // Owner and manager have full multi-outlet access
+  if (staff.role === 'owner' || staff.role === 'manager') return true;
+  // If table does not specify an outletId or uses demo ID, allow staff from current session outlet
+  if (!table.outletId || table.outletId === DEFAULT_OUTLET_ID) return true;
+  if (!staff.outletId || staff.outletId === DEFAULT_OUTLET_ID) return true;
+  return staff.outletId === table.outletId;
 }
 export function assertTableAccess(staff: StaffAccount | null, table: Table, txs: Record<string, Transaction>) {
   if (!staff) { audit('table.select','deny','Belum login',staff,table); return { ok:false as const, message:'Belum login.' }; }

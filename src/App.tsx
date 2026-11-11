@@ -761,7 +761,16 @@ export default function App() {
     setShowResetConfirm(true);
   };
 
-  const confirmResetData = () => {
+  const confirmResetData = async () => {
+    localStorage.clear();
+    if (getApiToken()) {
+      try {
+        await refreshApiSnapshot();
+        setShowResetConfirm(false);
+        if (soundEnabled) sounds.playBellSound();
+        return;
+      } catch {}
+    }
     setTables(INITIAL_TABLES);
     setActiveTransactions(INITIAL_TRANSACTIONS);
     setSettledTransactions([]);
@@ -793,7 +802,6 @@ export default function App() {
         receiptNumber: 'B-8839',
       },
     ]);
-    localStorage.clear();
     setShowResetConfirm(false);
     if (soundEnabled) sounds.playBellSound();
   };
