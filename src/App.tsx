@@ -58,7 +58,6 @@ const STORAGE_KEY_STAFF_ACCOUNTS = 'resto_pos_staff_accounts_v1';
 const STORAGE_KEY_PETTY_CASH = 'resto_pos_petty_cash_v1';
 const STORAGE_KEY_MENU_STOCK = 'resto_pos_menu_stock_v1';
 const STORAGE_KEY_CANCELLATIONS = 'resto_pos_cancellation_requests_v1';
-const STORAGE_KEY_AUTO_LOCK_TIMEOUT = 'resto_pos_auto_lock_timeout_v1';
 
 // Seed sample active transactions for occupied tables
 const INITIAL_TRANSACTIONS: Record<string, Transaction> = {
@@ -532,65 +531,11 @@ export default function App() {
 
   const [currentStaff, setCurrentStaff] = useState<StaffAccount | null>(() => {
     try {
-      // Keharusan mulai dari login dulu saat membuka aplikasi:
-      // Hanya baca staff jika belum di-lock, tapi untuk keamanan saat pertama kali buka aplikasi
-      // session dimulai dari layar login.
       const saved = localStorage.getItem(STORAGE_KEY_STAFF);
       if (saved) return authenticateStaff(JSON.parse(saved));
     } catch {}
     return null;
   });
-
-  // Saat pertama kali masuk aplikasi, harus mulai dari login dulu
-  const [isLocked, setIsLocked] = useState<boolean>(true);
-
-  // Session Auto-Lock Timeout Setting (dalam menit: 0 = nonaktif, 1, 2, 5, 10, 15, 30)
-  const [autoLockMinutes, setAutoLockMinutes] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_AUTO_LOCK_TIMEOUT);
-      if (saved !== null) {
-        const parsed = parseInt(saved, 10);
-        if (!isNaN(parsed) && parsed >= 0) return parsed;
-      }
-    } catch {}
-    return 5; // Default 5 menit
-  });
-
-  const handleUpdateAutoLockMinutes = (minutes: number) => {
-    setAutoLockMinutes(minutes);
-    try {
-      localStorage.setItem(STORAGE_KEY_AUTO_LOCK_TIMEOUT, String(minutes));
-    } catch {}
-    audit('settings.autolock_updated', 'allow', `Timeout auto-lock diatur ke ${minutes === 0 ? 'Nonaktif' : minutes + ' menit'}`, currentStaff);
-  };
-
-  // Activity listener untuk auto-lock session timeout
-  const lastActivityRef = useRef<number>(Date.now());
-  useEffect(() => {
-    const markActivity = () => {
-      lastActivityRef.current = Date.now();
-    };
-
-    window.addEventListener('pointerdown', markActivity, { passive: true });
-    window.addEventListener('keydown', markActivity, { passive: true });
-    window.addEventListener('touchstart', markActivity, { passive: true });
-
-    const interval = window.setInterval(() => {
-      if (autoLockMinutes > 0 && !isLocked && currentStaff) {
-        const elapsedMs = Date.now() - lastActivityRef.current;
-        if (elapsedMs >= autoLockMinutes * 60 * 1000) {
-          setIsLocked(true);
-        }
-      }
-    }, 10000);
-
-    return () => {
-      window.removeEventListener('pointerdown', markActivity);
-      window.removeEventListener('keydown', markActivity);
-      window.removeEventListener('touchstart', markActivity);
-      window.clearInterval(interval);
-    };
-  }, [autoLockMinutes, isLocked, currentStaff]);
 
   const handleCreateLocalStaff = (payload: {
     displayName: string;
@@ -703,6 +648,8 @@ export default function App() {
     return () => { cancelled = true; };
   }, [currentStaff?.id]);
 
+
+  const [isLocked, setIsLocked] = useState<boolean>(false);
 
   const [pettyCashEntries, setPettyCashEntries] = useState<PettyCashEntry[]>(() => {
     try {
@@ -1435,8 +1382,6 @@ export default function App() {
             onRestockMaterial={handleRestockMaterial}
             onResetData={handleResetData}
             onLockScreen={handleLockScreen}
-            autoLockMinutes={autoLockMinutes}
-            onUpdateAutoLockMinutes={handleUpdateAutoLockMinutes}
           />
         ) : activeTab === 'finance' && (currentStaff?.role === 'finance' || currentStaff?.role === 'owner') ? (
           <FinanceView
@@ -1645,7 +1590,7 @@ export default function App() {
           currentStaff={currentStaff}
           staffAccounts={staffAccounts}
           onLoginSuccess={handleLoginSuccess}
-          canCancel={false}
+          canCancel={!!currentStaff}
           onCancel={() => setIsLocked(false)}
         />
       )}
