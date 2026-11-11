@@ -25,6 +25,7 @@ interface LoginModalProps {
   onLoginSuccess: (staff: StaffAccount) => void;
   onCancel?: () => void;
   canCancel?: boolean;
+  isDemo?: boolean;
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({
@@ -33,6 +34,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onLoginSuccess,
   onCancel,
   canCancel = false,
+  isDemo = false,
 }) => {
   const staffList: StaffAccount[] = React.useMemo(() => {
     if (staffAccounts && staffAccounts.length > 0) return staffAccounts;
@@ -140,8 +142,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
     try {
-      let apiHandled = false;
-      try {
+      // In live production mode (isDemo === false), do not allow local demo fallback.
+      // Must authenticate against backend API with real database hash.
+      if (!isDemo) {
         const response = await fetch('/api/auth/pin', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -157,34 +160,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           setTimeout(() => onLoginSuccess(data.staff), 400);
           return;
         }
-        if (response.status === 403 || response.status === 429 || data?.code === 'ACCOUNT_BLOCKED') {
-          apiHandled = true;
-          throw new Error(data.error || 'Akun karyawan sedang diblokir atau akses ditolak.');
-        }
-        if (response.status === 401 && data?.error) {
-          // Check if local demo account matches when testing in demo/hybrid mode
-          const localAuth = authenticateByPin(cleanPin, staffList);
-          if (localAuth.success && localAuth.staff) {
-            localStorage.removeItem('gastro_cashier_api_token');
-            sounds.playBellSound();
-            setFailedAttempts(0);
-            setLockUntil(null);
-            setNfcSuccessAnimation('Selamat datang, ' + localAuth.staff.name + '!');
-            setTimeout(() => onLoginSuccess(localAuth.staff!), 400);
-            return;
-          }
-          if (localAuth.error && localAuth.error.includes('diblokir')) {
-            apiHandled = true;
-            throw new Error(localAuth.error);
-          }
-          apiHandled = true;
-          throw new Error(data.error);
-        }
-      } catch (apiErr) {
-        if (apiHandled) throw apiErr;
+        throw new Error(data?.error || 'PIN tidak valid atau akun tidak terdaftar.');
       }
 
-      // Local fallback mode when API server is offline or running in demo mode
+      // In Demo mode (/demo), authenticate using local demo accounts
       const localResult = authenticateByPin(cleanPin, staffList);
       if (!localResult.success || !localResult.staff) {
         throw new Error(localResult.error || 'PIN tidak valid atau akun tidak aktif.');
@@ -210,8 +189,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   };
   const handleNfcAuth = async (tagUid: string) => {
     try {
-      let apiHandled = false;
-      try {
+      if (!isDemo) {
         const response = await fetch('/api/auth/nfc', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -227,30 +205,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           setTimeout(() => onLoginSuccess(data.staff), 500);
           return;
         }
-        if (response.status === 403 || response.status === 429 || data?.code === 'ACCOUNT_BLOCKED') {
-          apiHandled = true;
-          throw new Error(data.error || 'Akun karyawan ini sedang diblokir.');
-        }
-        if (response.status === 401 && data?.error) {
-          const localNfc = authenticateByNfc(tagUid, staffList);
-          if (localNfc.success && localNfc.staff) {
-            localStorage.removeItem('gastro_cashier_api_token');
-            sounds.playBellSound();
-            setFailedAttempts(0);
-            setLockUntil(null);
-            setNfcSuccessAnimation('NFC terverifikasi: ' + localNfc.staff.name);
-            setTimeout(() => onLoginSuccess(localNfc.staff!), 500);
-            return;
-          }
-          if (localNfc.error && localNfc.error.includes('diblokir')) {
-            apiHandled = true;
-            throw new Error(localNfc.error);
-          }
-          apiHandled = true;
-          throw new Error(data.error);
-        }
-      } catch (apiErr) {
-        if (apiHandled) throw apiErr;
+        throw new Error(data?.error || 'Kartu NFC tidak terdaftar atau nonaktif.');
       }
 
       const localResult = authenticateByNfc(tagUid, staffList);
@@ -541,44 +496,46 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </div>
           )}
 
-          {/* Quick PIN Presets Bar (Always visible for fast testing) */}
-          <div className="clay-well p-2.5 rounded-2xl space-y-1.5">
-            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">
-              Auto-Fill Akun Staff & QA Demo:
-            </span>
-            <div className="grid grid-cols-3 gap-1.5">
-              {staffList.map((staff) => {
-                const isBlocked = (staff.status && staff.status !== 'active') || staff.isActive === false;
-                return (
-                  <button
-                    key={staff.id}
-                    type="button"
-                    onClick={() => handleQuickDemoStaff(staff)}
-                    disabled={isPinLocked}
-                    className={`min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer rounded-xl ${
-                      isBlocked
-                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                        : 'clay-btn-neutral'
-                    }`}
-                    title={`${staff.name} (${staff.role}) - PIN: ${staff.pin}${isBlocked ? ' [DIBLOKIR]' : ''}`}
-                  >
-                    {isBlocked ? (
-                      <Lock className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                    ) : staff.role === 'owner' ? (
-                      <Crown className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    ) : staff.role === 'cashier' ? (
-                      <CreditCard className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    ) : (
-                      <BarChart3 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    )}
-                    <span className="truncate">
-                      {staff.name.split(' ')[0]} ({staff.pin})
-                    </span>
-                  </button>
-                );
-              })}
+          {/* Quick PIN Presets Bar (Hanya tampil di Versi Demo /demo) */}
+          {isDemo && (
+            <div className="clay-well p-2.5 rounded-2xl space-y-1.5">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">
+                Auto-Fill Akun Staff &amp; QA Demo:
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {staffList.map((staff) => {
+                  const isBlocked = (staff.status && staff.status !== 'active') || staff.isActive === false;
+                  return (
+                    <button
+                      key={staff.id}
+                      type="button"
+                      onClick={() => handleQuickDemoStaff(staff)}
+                      disabled={isPinLocked}
+                      className={`min-h-[38px] px-2 py-1 text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer rounded-xl ${
+                        isBlocked
+                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                          : 'clay-btn-neutral'
+                      }`}
+                      title={`${staff.name} (${staff.role}) - PIN: ${staff.pin}${isBlocked ? ' [DIBLOKIR]' : ''}`}
+                    >
+                      {isBlocked ? (
+                        <Lock className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      ) : staff.role === 'owner' ? (
+                        <Crown className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      ) : staff.role === 'cashier' ? (
+                        <CreditCard className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      ) : (
+                        <BarChart3 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      )}
+                      <span className="truncate">
+                        {staff.name.split(' ')[0]} ({staff.pin})
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Error Feedback */}
           {errorMessage && !isPinLocked && (

@@ -429,9 +429,21 @@ const INITIAL_TRANSACTIONS: Record<string, Transaction> = {
 };
 
 export default function App() {
-  // State Initialization
+  // Mode Deteksi: /demo atau ?demo=true memisahkan versi demo murni dari live production
+  const isDemo = typeof window !== 'undefined' && (
+    window.location.pathname.startsWith('/demo') ||
+    new URLSearchParams(window.location.search).get('demo') === 'true'
+  );
+
+  // State Initialization: Versi Live (isDemo === false) TIDAK memuat dummy INITIAL_TABLES & dummy transactions
   const [tables, setTables] = useState<Table[]>(() => {
-    if (localStorage.getItem('gastro_cashier_api_token')) return [];
+    if (!isDemo) {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY_TABLES);
+        if (saved) return migrateTables(JSON.parse(saved));
+      } catch {}
+      return [];
+    }
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TABLES);
       if (saved) return migrateTables(JSON.parse(saved));
@@ -440,7 +452,13 @@ export default function App() {
   });
 
   const [activeTransactions, setActiveTransactions] = useState<Record<string, Transaction>>(() => {
-    if (localStorage.getItem('gastro_cashier_api_token')) return {};
+    if (!isDemo) {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
+        if (saved) return migrateTransactions(JSON.parse(saved));
+      } catch {}
+      return {};
+    }
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
       if (saved) return migrateTransactions(JSON.parse(saved));
@@ -685,8 +703,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!currentStaff) return;
-    if (!getApiToken()) return;
+    // Mode Live: otomatis ambil data langsung dari database API jika sudah login
+    if (isDemo) return;
+    if (!currentStaff || !getApiToken()) return;
     let cancelled = false;
     loadPosSnapshot().then(snapshot => {
       if (cancelled) return;
@@ -701,7 +720,7 @@ export default function App() {
       if (!cancelled) window.alert('Gagal memuat data POS dari server: ' + (error instanceof Error ? error.message : 'Unknown error'));
     });
     return () => { cancelled = true; };
-  }, [currentStaff?.id]);
+  }, [currentStaff?.id, isDemo]);
 
 
   const [pettyCashEntries, setPettyCashEntries] = useState<PettyCashEntry[]>(() => {
@@ -818,7 +837,10 @@ export default function App() {
         await refreshApiSnapshot();
         if (soundEnabled) sounds.playBellSound();
       } else {
-        // Fallback jika mode demo tanpa koneksi API
+        if (!isDemo) {
+          throw new Error('Tidak ada sesi token API aktif. Silakan login kembali.');
+        }
+        // Fallback hanya berlaku pada mode demo (/demo)
         setTables(INITIAL_TABLES);
         setActiveTransactions(INITIAL_TRANSACTIONS);
         setSettledTransactions([]);
@@ -1647,6 +1669,7 @@ export default function App() {
           onLoginSuccess={handleLoginSuccess}
           canCancel={false}
           onCancel={() => setIsLocked(false)}
+          isDemo={isDemo}
         />
       )}
     </div>
