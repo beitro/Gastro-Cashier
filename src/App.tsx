@@ -1399,7 +1399,7 @@ export default function App() {
         }}
         soundEnabled={soundEnabled}
         setSoundEnabled={setSoundEnabled}
-        onResetData={handleResetData}
+        onResetData={handleRefreshData}
         recentTicketsCount={allPrintTickets.length}
         lowStockAlertCount={Object.values(menuStock).filter((stock) => stock === 0).length}
         activeKdsCount={countActiveKdsItems(activeTransactions)}
@@ -1433,7 +1433,7 @@ export default function App() {
             onSwitchToFloorPlan={() => setActiveTab('floor')}
             onSwitchToFinance={() => setActiveTab('finance')}
             onRestockMaterial={handleRestockMaterial}
-            onResetData={handleResetData}
+            onResetData={handleRefreshData}
             onLockScreen={handleLockScreen}
             autoLockMinutes={autoLockMinutes}
             onUpdateAutoLockMinutes={handleUpdateAutoLockMinutes}
