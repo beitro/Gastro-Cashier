@@ -14,6 +14,7 @@ import {
   Flame,
   CheckCircle2,
   AlertTriangle,
+  Clock,
 } from 'lucide-react';
 
 interface OwnerDashboardViewProps {
@@ -29,6 +30,8 @@ interface OwnerDashboardViewProps {
   onRestockMaterial: (materialId: string, amount: number) => void;
   onResetData: () => void;
   onLockScreen: () => void;
+  autoLockMinutes?: number;
+  onUpdateAutoLockMinutes?: (minutes: number) => void;
 }
 
 export const OwnerDashboardView: React.FC<OwnerDashboardViewProps> = ({
@@ -44,6 +47,8 @@ export const OwnerDashboardView: React.FC<OwnerDashboardViewProps> = ({
   onRestockMaterial,
   onResetData,
   onLockScreen,
+  autoLockMinutes = 5,
+  onUpdateAutoLockMinutes,
 }) => {
   const metrics = calculateFinanceMetrics(settledTransactions, pettyCashEntries);
 
@@ -82,6 +87,27 @@ export const OwnerDashboardView: React.FC<OwnerDashboardViewProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-2.5 shrink-0">
+          {onUpdateAutoLockMinutes && (
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl clay-well text-xs font-bold text-slate-700">
+              <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="text-[11px] text-slate-500 uppercase font-black">Auto-Lock:</span>
+              <select
+                value={autoLockMinutes}
+                onChange={(e) => onUpdateAutoLockMinutes(Number(e.target.value))}
+                className="bg-transparent font-black text-slate-900 focus:outline-hidden cursor-pointer text-xs"
+                title="Waktu timeout kunci layar otomatis jika tidak ada aktivitas"
+              >
+                <option value={1}>1 Menit</option>
+                <option value={2}>2 Menit</option>
+                <option value={5}>5 Menit (Standar)</option>
+                <option value={10}>10 Menit</option>
+                <option value={15}>15 Menit</option>
+                <option value={30}>30 Menit</option>
+                <option value={0}>Nonaktif</option>
+              </select>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={onOpenGoogleSheets}
