@@ -33,6 +33,8 @@ interface PaymentModalProps {
     cardBank?: string;
     changeAmount?: number;
     discountAmount: number;
+    managerApprovedId?: string;
+    managerApprovedName?: string;
   }) => void;
 }
 
@@ -133,7 +135,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         throw new Error(data.error || 'PIN Manager salah.');
       }
 
-      setManagerApprovedInfo({ approved: true, managerName: data.managerName || 'Manager' });
+      setManagerApprovedInfo({ approved: true, managerName: data.managerName || 'Manager', managerId: data.managerId || 'mgr-approved' } as any);
       setShowManagerPinModal(false);
       setManagerPin('');
       sounds.playSuccessSound?.();
@@ -157,6 +159,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       changeAmount: paymentMethod === 'cash' ? changeAmount : 0,
       cardBank: paymentMethod === 'card' ? selectedBank : undefined,
       discountAmount,
+      managerApprovedId: managerApprovedInfo?.approved ? (managerApprovedInfo as any).managerId || 'mgr-approved' : undefined,
+      managerApprovedName: managerApprovedInfo?.approved ? managerApprovedInfo.managerName : undefined,
     });
   };
 

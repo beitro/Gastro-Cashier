@@ -1252,8 +1252,10 @@ export default function App() {
     cardBank?: string;
     changeAmount?: number;
     discountAmount: number;
+    managerApprovedId?: string;
+    managerApprovedName?: string;
   }) => {
-    const { transactionId, tableId, paymentMethod, cashGiven, cardBank, changeAmount, discountAmount } = params;
+    const { transactionId, tableId, paymentMethod, cashGiven, cardBank, changeAmount, discountAmount, managerApprovedId, managerApprovedName } = params;
     const currentTx = activeTransactions[transactionId];
     if (!currentTx || !canOperatePOS(currentStaff)) return;
 
@@ -1304,7 +1306,7 @@ export default function App() {
 
     setIsSettlingPayment(true);
     try {
-      const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven, cardBank);
+      const payment = await settleApiSession(transactionId, paymentMethod, discountAmount, cashGiven, cardBank, managerApprovedId, managerApprovedName);
       if (payment.status !== 'settled') {
         await refreshApiSnapshot();
         window.alert('Pembayaran tercatat sebagai PENDING. Meja belum ditutup dan struk lunas belum diterbitkan. Manager/Finance harus mengonfirmasi pembayaran melalui endpoint settlement setelah verifikasi bukti.');

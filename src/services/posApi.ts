@@ -239,7 +239,15 @@ export async function submitApiOrder(sessionId: string, items: OrderItem[], menu
   return result;
 }
 
-export async function settleApiSession(sessionId: string, method: 'cash' | 'qris' | 'card' | 'transfer', discountAmount: number, cashReceived?: number, cardBank?: string): Promise<ApiRow> {
+export async function settleApiSession(
+  sessionId: string,
+  method: 'cash' | 'qris' | 'card' | 'transfer',
+  discountAmount: number,
+  cashReceived?: number,
+  cardBank?: string,
+  managerApprovedId?: string,
+  managerApprovedName?: string
+): Promise<ApiRow> {
   const fingerprint=[method,Number(discountAmount),method==='cash'?Number(cashReceived||0):0,cardBank||''].join(':');
   const storageKey='gastro_payment_idem:'+sessionId+':'+encodeURIComponent(fingerprint);
   const store=typeof window!=='undefined'?window.sessionStorage:null;
@@ -247,7 +255,15 @@ export async function settleApiSession(sessionId: string, method: 'cash' | 'qris
   store?.setItem(storageKey,idempotencyKey);
   const result=await request<ApiRow>('/api/sessions/' + encodeURIComponent(sessionId) + '/payments', {
     method: 'POST',
-    body: JSON.stringify({ method, discountAmount, cashReceived: method === 'cash' ? cashReceived : undefined, cardBank, idempotencyKey }),
+    body: JSON.stringify({
+      method,
+      discountAmount,
+      cashReceived: method === 'cash' ? cashReceived : undefined,
+      cardBank,
+      managerApprovedId,
+      managerApprovedName,
+      idempotencyKey
+    }),
   });
   store?.removeItem(storageKey);
   return result;

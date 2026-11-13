@@ -776,7 +776,7 @@ app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncR
 }));
 
 app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyncRoute(async (req,res) => {
-  const { method, discountAmount=0, cashReceived, idempotencyKey, cardBank } = req.body || {};
+  const { method, discountAmount=0, cashReceived, idempotencyKey, cardBank, managerApprovedId, managerApprovedName } = req.body || {};
   if (!['cash','qris','card','transfer','other'].includes(method) || typeof idempotencyKey!=='string' || idempotencyKey.length<8 || idempotencyKey.length>128 || !Number.isFinite(Number(discountAmount)) || Number(discountAmount)<0) return res.status(400).json({error:'Metode, idempotencyKey (8–128 karakter), atau diskon tidak valid.'});
   const result=await scoped(req,async c=>{
     const idemScope='payment:'+req.auth.tenant_id+':'+req.auth.outlet_id+':'+idempotencyKey;
@@ -807,7 +807,8 @@ app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyn
     const received=method==='cash'?Number(cashReceived):total;
     if(!Number.isFinite(received)||received<total) return {status:400,body:{error:'Uang diterima tidak cukup.'}};
     const receipt='R-'+new Date().toISOString().replace(/[-:TZ.]/g,'').slice(0,14)+'-'+randomBytes(3).toString('hex').toUpperCase();
-    const status=method==='cash'?'settled':'pending';
+    const isInstantSettle = method === 'cash' || (method === 'qris' && Boolean(managerApprovedId));
+    const status = isInstantSettle ? 'settled' : 'pending';
     const paidAt = status === 'settled' ? new Date() : null;
     const settledAt = status === 'settled' ? new Date() : null;
     const settledByStaffId = status === 'settled' ? req.auth.staff_id : null;
@@ -845,6 +846,13 @@ app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyn
         ]
       )
     ).rows[0];
+
+    if (managerApprovedId && status === 'settled') {
+      await c.query(
+        "UPDATE payments SET provider_reference = $1, settlement_note = $2, settled_by_staff_id = $3 WHERE id = $4",
+        ['QRIS-MGR-APPROVED', 'Disetujui oleh Manager: ' + (managerApprovedName || 'Manager'), managerApprovedId, payment.id]
+      );
+    }
     if(status==='settled') {
       for(const item of items.rows) if(Number(item.line_total)>0) await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5)',[req.auth.tenant_id,req.auth.outlet_id,payment.id,item.id,Number(item.line_total)]);
       await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
