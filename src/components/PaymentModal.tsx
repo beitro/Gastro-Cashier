@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { Table, Transaction } from '../types/pos';
 import { formatRupiah, calculateChange, computeSettlementBreakdown } from '../utils/posCalculations';
 import {
+  ShieldCheck,
+  CheckCircle2,
+  KeyRound,
   CreditCard,
   X,
   Banknote,
@@ -37,6 +40,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   isSubmitting = false,
   onCompleteSettlement,
 }) => {
+  
+  // State untuk Manager QR Approval
+  const [showManagerPinModal, setShowManagerPinModal] = useState(false);
+  const [managerPin, setManagerPin] = useState('');
+  const [managerError, setManagerError] = useState('');
+  const [isVerifyingManager, setIsVerifyingManager] = useState(false);
+  const [managerApprovedInfo, setManagerApprovedInfo] = useState<{ approved: boolean; managerName: string } | null>(null);
+
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris' | 'card' | 'transfer'>('cash');
   const [discountType, setDiscountType] = useState<'none' | 'member10' | 'promo20k'>('none');
   const [cashGiven, setCashGiven] = useState<number>(0);
@@ -70,6 +81,45 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     setCashGiven(val);
   };
 
+  
+  const handleVerifyManagerPin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!managerPin || managerPin.length < 4) {
+      setManagerError('Masukkan 4 digit PIN Manager');
+      return;
+    }
+
+    setIsVerifyingManager(true);
+    setManagerError('');
+
+    try {
+      const token = localStorage.getItem('gastro_pos_token');
+      const res = await fetch('/api/auth/verify-manager-pin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': 'Bearer ' + token } : {})
+        },
+        body: JSON.stringify({ pin: managerPin })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'PIN Manager salah.');
+      }
+
+      setManagerApprovedInfo({ approved: true, managerName: data.managerName || 'Manager' });
+      setShowManagerPinModal(false);
+      setManagerPin('');
+      sounds.playSuccessSound?.();
+    } catch (err: any) {
+      setManagerError(err.message || 'Gagal memverifikasi PIN Manager.');
+      sounds.playAlertSound?.();
+    } finally {
+      setIsVerifyingManager(false);
+    }
+  };
+
   const handleProcessPayment = () => {
     if (!isCashSufficient || isSubmitting) return;
 
@@ -87,6 +137,69 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 clay-canvas flex flex-col w-screen h-screen overflow-hidden select-none text-slate-800">
+      {/* MODAL INPUT PIN MANAGER */}
+      {showManagerPinModal && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 text-center border-4 border-amber-400 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="w-14 h-14 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+              <KeyRound className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h4 className="text-lg font-black text-slate-900">Otorisasi Manager</h4>
+              <p className="text-xs text-slate-500 font-semibold mt-1">
+                Masukkan PIN Manager untuk menyetujui mutasi dana QRIS senilai <span className="font-bold text-slate-800">{formatRupiah(finalTotal)}</span>
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifyManagerPin} className="space-y-4">
+              <div>
+                <input
+                  type="password"
+                  maxLength={8}
+                  autoFocus
+                  inputMode="numeric"
+                  placeholder="••••"
+                  value={managerPin}
+                  onChange={(e) => setManagerPin(e.target.value.replace(/\D/g, ''))}
+                  className="w-full text-center text-3xl font-mono tracking-widest py-3 px-4 bg-slate-100 border-2 border-slate-300 rounded-2xl focus:border-amber-500 focus:bg-white outline-none font-bold"
+                />
+              </div>
+
+              {managerError && (
+                <p className="text-xs font-bold text-rose-600 bg-rose-50 py-1.5 px-3 rounded-lg">
+                  {managerError}
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowManagerPinModal(false)}
+                  className="py-3 px-4 text-xs font-extrabold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+                >
+                  BATAL
+                </button>
+                <button
+                  type="submit"
+                  disabled={isVerifyingManager || managerPin.length < 4}
+                  className="py-3 px-4 text-xs font-black text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  {isVerifyingManager ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>MEMERIKSA...</span>
+                    </>
+                  ) : (
+                    <span>APPROVE</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="h-20 clay-bar px-4 sm:px-6 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3.5">
@@ -355,9 +468,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               </div>
             )}
 
-            {/* METHOD 2: QRIS */}
+                        {/* METHOD 2: QRIS */}
             {paymentMethod === 'qris' && (
-              <div className="clay-card p-6 text-center space-y-3.5">
+              <div className="clay-card p-6 text-center space-y-4">
                 <div className="inline-block bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
                   <img
                     src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=RESTO-NUSANTARA-TRX-${transaction.id}-TOTAL-${finalTotal}`}
@@ -370,12 +483,40 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                   </div>
                 </div>
                 <div className="text-sm text-slate-600">
-                  <p className="font-black font-mono tabular-nums text-emerald-800 text-xl">
+                  <p className="font-black font-mono tabular-nums text-emerald-800 text-2xl">
                     {formatRupiah(finalTotal)}
                   </p>
-                  <p className="text-xs text-amber-700 mt-2 font-bold">
-                    QR di layar ini masih kode demonstrasi, bukan QRIS pembayaran valid. Jangan anggap lunas. Catatan pembayaran akan berstatus PENDING sampai Finance/Manager memverifikasi transaksi dari kanal pembayaran resmi.
-                  </p>
+                </div>
+
+                {/* Manager Verification Box */}
+                <div className="pt-2 border-t border-slate-200">
+                  {managerApprovedInfo?.approved ? (
+                    <div className="p-3.5 bg-emerald-50 border-2 border-emerald-500 rounded-xl flex items-center justify-center gap-2.5 text-emerald-800 animate-in fade-in zoom-in-95 duration-200">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <div className="text-left">
+                        <p className="text-xs font-black uppercase tracking-wider text-emerald-900">Pembayaran QR Dikonfirmasi</p>
+                        <p className="text-xs font-semibold text-emerald-700">Diverifikasi oleh: {managerApprovedInfo.managerName}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      <p className="text-xs text-amber-700 font-bold">
+                        ⚠️ Manager wajib memastikan dana QRIS sudah masuk ke mutasi outlet sebelum transaksi ditutup.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManagerError('');
+                          setManagerPin('');
+                          setShowManagerPinModal(true);
+                        }}
+                        className="w-full py-3.5 px-4 clay-btn-amber text-xs sm:text-sm font-black flex items-center justify-center gap-2 shadow-sm cursor-pointer hover:brightness-105"
+                      >
+                        <ShieldCheck className="w-5 h-5 shrink-0" />
+                        <span>MANAGER APPROVED (KONFIRMASI QR)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -438,7 +579,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               ) : (
                 <>
                   <Receipt className="w-5 h-5 shrink-0" />
-                  <span>{paymentMethod === 'cash' ? 'SELESAIKAN PEMBAYARAN & TUTUP MEJA' : 'CATAT PEMBAYARAN PENDING'}</span>
+                  <span>{paymentMethod === 'cash' || (paymentMethod === 'qris' && managerApprovedInfo?.approved) ? 'SELESAIKAN PEMBAYARAN & TUTUP MEJA' : 'CATAT PEMBAYARAN PENDING'}</span>
                 </>
               )}
             </button>

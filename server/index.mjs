@@ -305,6 +305,42 @@ app.post('/api/auth/logout', authenticate, asyncRoute(async (req,res) => {
   });
   res.json({ ok:true });
 }));
+
+app.post("/api/auth/verify-manager-pin", authenticate, asyncRoute(async (req, res) => {
+  const pin = String(req.body?.pin || "").trim();
+  if (!/^\d{4,8}$/.test(pin)) {
+    return res.status(400).json({ error: "PIN Manager harus 4–8 digit angka." });
+  }
+
+  const managers = await transaction(async c => {
+    await setRlsContext(c, { capabilities: ["auth_lookup"] });
+    return c.query(`
+      SELECT s.id, s.display_name, tm.role_code, s.pin_hash, s.status
+      FROM staff_accounts s
+      JOIN tenant_memberships tm ON tm.staff_id = s.id
+      JOIN outlet_memberships om ON om.tenant_membership_id = tm.id
+      WHERE tm.tenant_id = $1 AND om.outlet_id = $2
+        AND tm.role_code IN ('manager', 'owner')
+        AND s.status = 'active' AND tm.status = 'active' AND om.status = 'active'
+        AND s.pin_hash IS NOT NULL
+    `, [req.auth.tenant_id, req.auth.outlet_id]);
+  });
+
+  for (const mgr of managers.rows) {
+    if (await verifyCredential(pin, mgr.pin_hash)) {
+      return res.json({
+        ok: true,
+        approved: true,
+        managerId: mgr.id,
+        managerName: mgr.display_name,
+        role: mgr.role_code
+      });
+    }
+  }
+
+  return res.status(401).json({ error: "PIN Manager tidak cocok atau akun tidak memiliki otoritas Manager/Owner." });
+}));
+
 app.get('/api/me', authenticate, (req,res) => {
   const a=req.auth; res.json({ id:a.staff_id,name:a.display_name,role:normalizeRole(a.role_code),tenantId:a.tenant_id,tenantName:a.tenant_name,outletId:a.outlet_id,outletName:a.outlet_name });
 });
