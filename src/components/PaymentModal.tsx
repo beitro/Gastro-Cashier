@@ -17,11 +17,14 @@ import {
 } from 'lucide-react';
 import { sounds } from '../utils/soundEffects';
 
+import { StaffAccount } from '../types/pos';
+
 interface PaymentModalProps {
   table: Table;
   transaction: Transaction;
   onClose: () => void;
   isSubmitting?: boolean;
+  currentStaff?: StaffAccount | null;
   onCompleteSettlement: (params: {
     transactionId: string;
     tableId: string;
@@ -38,6 +41,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   transaction,
   onClose,
   isSubmitting = false,
+  currentStaff,
   onCompleteSettlement,
 }) => {
   
@@ -47,6 +51,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [managerError, setManagerError] = useState('');
   const [isVerifyingManager, setIsVerifyingManager] = useState(false);
   const [managerApprovedInfo, setManagerApprovedInfo] = useState<{ approved: boolean; managerName: string } | null>(null);
+
+  
+  const isCashierUser = currentStaff?.role === 'cashier' || currentStaff?.roleCode === 'cashier';
 
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris' | 'card' | 'transfer'>('cash');
   const [discountType, setDiscountType] = useState<'none' | 'member10' | 'promo20k'>('none');
@@ -82,6 +89,24 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   };
 
   
+  
+  const handleKeypadPress = (digit: string) => {
+    sounds.playTapSound?.();
+    if (managerPin.length < 8) {
+      setManagerPin((prev) => prev + digit);
+    }
+  };
+
+  const handleKeypadClear = () => {
+    sounds.playTapSound?.();
+    setManagerPin('');
+  };
+
+  const handleKeypadBackspace = () => {
+    sounds.playTapSound?.();
+    setManagerPin((prev) => prev.slice(0, -1));
+  };
+
   const handleVerifyManagerPin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!managerPin || managerPin.length < 4) {
@@ -137,69 +162,111 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 clay-canvas flex flex-col w-screen h-screen overflow-hidden select-none text-slate-800">
-      {/* MODAL INPUT PIN MANAGER */}
+            {/* MODAL INPUT PIN MANAGER DENGAN KEYPAD ANGKA */}
       {showManagerPinModal && (
-        <div className="fixed inset-0 z-[60] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 text-center border-4 border-amber-400 space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="w-14 h-14 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
-              <KeyRound className="w-7 h-7" />
+        <div className="fixed inset-0 z-[60] bg-slate-900/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-5 sm:p-6 text-center border-4 border-amber-400 space-y-3.5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="w-12 h-12 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+              <KeyRound className="w-6 h-6" />
             </div>
 
             <div>
-              <h4 className="text-lg font-black text-slate-900">Otorisasi Manager</h4>
-              <p className="text-xs text-slate-500 font-semibold mt-1">
-                Masukkan PIN Manager untuk menyetujui mutasi dana QRIS senilai <span className="font-bold text-slate-800">{formatRupiah(finalTotal)}</span>
+              <h4 className="text-base sm:text-lg font-black text-slate-900">Otorisasi PIN Manager</h4>
+              <p className="text-[11px] sm:text-xs text-slate-500 font-semibold mt-0.5">
+                Konfirmasi penerimaan dana QRIS senilai <span className="font-bold text-slate-800">{formatRupiah(finalTotal)}</span>
               </p>
             </div>
 
-            <form onSubmit={handleVerifyManagerPin} className="space-y-4">
-              <div>
-                <input
-                  type="password"
-                  maxLength={8}
-                  autoFocus
-                  inputMode="numeric"
-                  placeholder="••••"
-                  value={managerPin}
-                  onChange={(e) => setManagerPin(e.target.value.replace(/\D/g, ''))}
-                  className="w-full text-center text-3xl font-mono tracking-widest py-3 px-4 bg-slate-100 border-2 border-slate-300 rounded-2xl focus:border-amber-500 focus:bg-white outline-none font-bold"
+            {/* Display PIN Dots */}
+            <div className="bg-slate-100 border-2 border-slate-300 rounded-2xl py-3 px-4 flex items-center justify-center gap-3">
+              {[0, 1, 2, 3].map((idx) => (
+                <div
+                  key={idx}
+                  className={`w-4 h-4 rounded-full border-2 transition-all ${
+                    managerPin.length > idx
+                      ? 'bg-amber-500 border-amber-600 scale-110 shadow-sm'
+                      : 'bg-white border-slate-300'
+                  }`}
                 />
-              </div>
+              ))}
+            </div>
 
-              {managerError && (
-                <p className="text-xs font-bold text-rose-600 bg-rose-50 py-1.5 px-3 rounded-lg">
-                  {managerError}
-                </p>
-              )}
+            {managerError && (
+              <p className="text-xs font-bold text-rose-600 bg-rose-50 py-1.5 px-3 rounded-lg animate-bounce">
+                {managerError}
+              </p>
+            )}
 
-              <div className="grid grid-cols-2 gap-2.5 pt-2">
+            {/* Tactile On-Screen Keypad Angka */}
+            <div className="grid grid-cols-3 gap-2 max-w-[260px] mx-auto pt-1">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
                 <button
+                  key={digit}
                   type="button"
-                  onClick={() => setShowManagerPinModal(false)}
-                  className="py-3 px-4 text-xs font-extrabold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+                  onClick={() => handleKeypadPress(digit)}
+                  className="h-12 bg-slate-100 hover:bg-slate-200 active:bg-amber-100 active:scale-95 text-xl font-black text-slate-800 rounded-xl flex items-center justify-center cursor-pointer transition-all border border-slate-200 shadow-sm"
                 >
-                  BATAL
+                  {digit}
                 </button>
-                <button
-                  type="submit"
-                  disabled={isVerifyingManager || managerPin.length < 4}
-                  className="py-3 px-4 text-xs font-black text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
-                >
-                  {isVerifyingManager ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>MEMERIKSA...</span>
-                    </>
-                  ) : (
-                    <span>APPROVE</span>
-                  )}
-                </button>
-              </div>
-            </form>
+              ))}
+
+              <button
+                type="button"
+                onClick={handleKeypadClear}
+                className="h-12 bg-rose-50 hover:bg-rose-100 text-xs font-extrabold text-rose-700 rounded-xl flex items-center justify-center cursor-pointer border border-rose-200 uppercase tracking-wider"
+              >
+                Clear
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleKeypadPress('0')}
+                className="h-12 bg-slate-100 hover:bg-slate-200 active:bg-amber-100 active:scale-95 text-xl font-black text-slate-800 rounded-xl flex items-center justify-center cursor-pointer transition-all border border-slate-200 shadow-sm"
+              >
+                0
+              </button>
+
+              <button
+                type="button"
+                onClick={handleKeypadBackspace}
+                className="h-12 bg-slate-100 hover:bg-slate-200 text-sm font-black text-slate-600 rounded-xl flex items-center justify-center cursor-pointer border border-slate-200"
+              >
+                ⌫
+              </button>
+            </div>
+
+            {/* Actions: Batal vs Approve */}
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowManagerPinModal(false);
+                  setManagerPin('');
+                  setManagerError('');
+                }}
+                className="py-2.5 px-3 text-xs font-black text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                BATAL
+              </button>
+              <button
+                type="button"
+                disabled={isVerifyingManager || managerPin.length < 4}
+                onClick={handleVerifyManagerPin}
+                className="py-2.5 px-3 text-xs font-black text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-40 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+              >
+                {isVerifyingManager ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>CEK...</span>
+                  </>
+                ) : (
+                  <span>APPROVE</span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
-
       {/* Header */}
       <div className="h-20 clay-bar px-4 sm:px-6 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3.5">
@@ -468,7 +535,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               </div>
             )}
 
-                        {/* METHOD 2: QRIS */}
+                                    {/* METHOD 2: QRIS */}
             {paymentMethod === 'qris' && (
               <div className="clay-card p-6 text-center space-y-4">
                 <div className="inline-block bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
@@ -490,18 +557,27 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
                 {/* Manager Verification Box */}
                 <div className="pt-2 border-t border-slate-200">
-                  {managerApprovedInfo?.approved ? (
+                  {/* Jika staf yang login sudah Manager / Owner, otomatis verified */}
+                  {(!isCashierUser && currentStaff) ? (
+                    <div className="p-3 bg-emerald-50 border-2 border-emerald-500 rounded-xl flex items-center justify-center gap-2.5 text-emerald-800">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <div className="text-left">
+                        <p className="text-xs font-black uppercase tracking-wider text-emerald-900">Otoritas Manager Aktif</p>
+                        <p className="text-xs font-semibold text-emerald-700">Diverifikasi langsung oleh: {currentStaff.name} ({currentStaff.role})</p>
+                      </div>
+                    </div>
+                  ) : managerApprovedInfo?.approved ? (
                     <div className="p-3.5 bg-emerald-50 border-2 border-emerald-500 rounded-xl flex items-center justify-center gap-2.5 text-emerald-800 animate-in fade-in zoom-in-95 duration-200">
                       <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                       <div className="text-left">
                         <p className="text-xs font-black uppercase tracking-wider text-emerald-900">Pembayaran QR Dikonfirmasi</p>
-                        <p className="text-xs font-semibold text-emerald-700">Diverifikasi oleh: {managerApprovedInfo.managerName}</p>
+                        <p className="text-xs font-semibold text-emerald-700">Disetujui oleh Manager: {managerApprovedInfo.managerName}</p>
                       </div>
                     </div>
                   ) : (
                     <div className="space-y-2.5">
                       <p className="text-xs text-amber-700 font-bold">
-                        ⚠️ Manager wajib memastikan dana QRIS sudah masuk ke mutasi outlet sebelum transaksi ditutup.
+                        ⚠️ Khusus Kasir: Manager wajib mengonfirmasi bahwa dana QRIS telah masuk sebelum meja ditutup.
                       </p>
                       <button
                         type="button"
@@ -513,7 +589,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         className="w-full py-3.5 px-4 clay-btn-amber text-xs sm:text-sm font-black flex items-center justify-center gap-2 shadow-sm cursor-pointer hover:brightness-105"
                       >
                         <ShieldCheck className="w-5 h-5 shrink-0" />
-                        <span>MANAGER APPROVED (KONFIRMASI QR)</span>
+                        <span>MANAGER APPROVED (INPUT PIN MANAGER)</span>
                       </button>
                     </div>
                   )}
@@ -579,7 +655,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               ) : (
                 <>
                   <Receipt className="w-5 h-5 shrink-0" />
-                  <span>{paymentMethod === 'cash' || (paymentMethod === 'qris' && managerApprovedInfo?.approved) ? 'SELESAIKAN PEMBAYARAN & TUTUP MEJA' : 'CATAT PEMBAYARAN PENDING'}</span>
+                  <span>{paymentMethod === 'cash' || (paymentMethod === 'qris' && (!isCashierUser || managerApprovedInfo?.approved)) ? 'SELESAIKAN PEMBAYARAN & TUTUP MEJA' : 'CATAT PEMBAYARAN PENDING'}</span>
                 </>
               )}
             </button>
