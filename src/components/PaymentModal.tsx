@@ -118,7 +118,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     setManagerError('');
 
     try {
-      const token = localStorage.getItem('gastro_pos_token');
+      const token = localStorage.getItem('gastro_cashier_api_token') || localStorage.getItem('gastro_pos_token');
       const res = await fetch('/api/auth/verify-manager-pin', {
         method: 'POST',
         headers: {
