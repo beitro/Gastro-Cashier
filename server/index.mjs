@@ -795,8 +795,29 @@ app.post('/api/sessions/:sessionId/payments', authenticate, requirePosRole, asyn
       return {status:200,body:prior};
     }
     if(!['active','billing'].includes(session.rows[0].status)) return {status:409,body:{error:'Sesi sudah ditutup dan tidak menerima pembayaran baru.'}};
-    const pending=await c.query("SELECT id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND status='pending' FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
-    if(pending.rowCount) return {status:409,body:{error:'Sudah ada pembayaran pending untuk sesi ini. Selesaikan atau void pembayaran tersebut terlebih dahulu.',pendingPaymentId:pending.rows[0].id}};
+    const pending=await c.query("SELECT * FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND status='pending' FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+    if(pending.rowCount) {
+      if (managerApprovedId) {
+        // Jika ada otorisasi Manager, langsung selesaikan (settle) pembayaran pending ini!
+        const updated = (await c.query(`
+          UPDATE payments 
+          SET status = 'settled', paid_at = now(), settled_at = now(), settled_by_staff_id = $1,
+              provider_reference = 'QRIS-MGR-APPROVED',
+              settlement_note = $2
+          WHERE id = $3 RETURNING *
+        `, [managerApprovedId, 'Disetujui oleh Manager: ' + (managerApprovedName || 'Manager'), pending.rows[0].id])).rows[0];
+
+        const pendingItems = await c.query("SELECT id,line_total FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND cooking_status<>'cancelled' ORDER BY created_at FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+        for(const item of pendingItems.rows) {
+          if(Number(item.line_total)>0) {
+            await c.query('INSERT INTO payment_allocations(tenant_id,outlet_id,payment_id,order_item_id,amount) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,outlet_id,payment_id,order_item_id) DO NOTHING',[req.auth.tenant_id,req.auth.outlet_id,updated.id,item.id,Number(item.line_total)]);
+          }
+        }
+        await c.query("UPDATE dining_sessions SET status='closed',closed_at=now(),version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
+        return {status:200,body:updated};
+      }
+      return {status:409,body:{error:'Sudah ada pembayaran pending untuk sesi ini. Selesaikan atau void pembayaran tersebut terlebih dahulu.',pendingPaymentId:pending.rows[0].id}};
+    }
     const items=await c.query("SELECT id,line_total FROM order_items WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND cooking_status<>'cancelled' ORDER BY created_at FOR UPDATE",[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     if(!items.rowCount) return {status:400,body:{error:'Tidak ada item pesanan yang dapat dibayar.'}};
     const subtotal=items.rows.reduce((sum,x)=>sum+Number(x.line_total),0),discount=Number(discountAmount);
