@@ -10,7 +10,7 @@ export function getApiToken(): string | null {
   return typeof window === 'undefined' ? null : window.localStorage.getItem(TOKEN_KEY);
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getApiToken();
   if (!token) throw new Error('Sesi API tidak tersedia. Silakan login ulang.');
   const response = await fetch(API_BASE + path, {

@@ -46,6 +46,7 @@ import { FinanceView } from './components/FinanceView';
 import { OwnerDashboardView } from './components/OwnerDashboardView';
 import { MenuStockControl, CancellationRequest } from './components/MenuStockControl';
 import { StaffAdminView } from './components/StaffAdminView';
+import { InventoryWorkspaceView } from './components/InventoryWorkspaceView';
 
 const STORAGE_KEY_TABLES = 'resto_pos_tables_v1';
 const STORAGE_KEY_TRANSACTIONS = 'resto_pos_tx_v1';
@@ -784,6 +785,8 @@ export default function App() {
       setActiveTab('owner');
     } else if (staff.role === 'finance') {
       setActiveTab('finance');
+    } else if (staff.role === 'inventory') {
+      setActiveTab('warehouse');
     } else if (staff.role === 'kitchen') {
       setActiveTab('kds');
     } else {
@@ -1262,11 +1265,10 @@ export default function App() {
     if (!getApiToken()) {
       const completedTx: Transaction = recalculateTransactionTotals({
         ...currentTx,
-        status: 'completed',
-        closedAt: new Date().toISOString(),
+        status: 'settled',
+        paidAt: new Date().toISOString(),
         paymentMethod,
         cashGiven,
-        cardBank,
         changeAmount,
         discountAmount,
       });
@@ -1478,6 +1480,26 @@ export default function App() {
             onOpenGoogleSheets={() => handleOpenGoogleSheets('sales')}
             onReprintReceipt={handleReprintReceipt}
             onLockScreen={handleLockScreen}
+          />
+        ) : (activeTab === 'warehouse' || activeTab === 'menu_admin' || activeTab === 'settings') && currentStaff ? (
+          <InventoryWorkspaceView
+            currentStaff={currentStaff}
+            initialSection={
+              activeTab === 'menu_admin'
+                ? 'menu_admin'
+                : activeTab === 'settings'
+                ? 'app_settings'
+                : currentStaff.role === 'inventory'
+                ? 'receipt'
+                : 'admin_stock'
+            }
+            localMaterials={rawMaterials}
+            onSyncLocalMaterials={(next) => setRawMaterials(next)}
+            localMenuItems={MENU_ITEMS}
+            localMenuStock={menuStock}
+            onUpdateLocalMenuStock={(menuId, qty) =>
+              setMenuStock((prev) => ({ ...prev, [menuId]: qty }))
+            }
           />
         ) : (
           <FloorPlanGrid

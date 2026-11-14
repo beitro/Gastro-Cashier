@@ -5,6 +5,8 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import { HttpError, registerInventoryRoutes, loadInventorySettings, depleteRecipeIngredients, restoreRecipeIngredients } from './inventory.mjs';
+import { registerManagementRoutes } from './management.mjs';
 
 dotenv.config();
 const { Pool } = pg;
@@ -80,7 +82,7 @@ async function setRlsContext(client, claims) {
   );
   await client.query("SELECT set_config('app.context_token',$1,true)", [signRlsContext({ ...claims, txid: tx.rows[0].txid })]);
 }
-const normalizeRole = (role) => ['owner','manager','finance','cashier','waiter','kitchen'].includes(role) ? role : null;
+const normalizeRole = (role) => ['owner','manager','finance','cashier','waiter','kitchen','inventory'].includes(role) ? role : null;
 function requireOwner(req,res,next) { if (!req.auth || req.auth.role_code !== 'owner') return res.status(403).json({error:'Hanya Owner yang dapat mengelola staff.'}); next(); }
 function requirePosRole(req, res, next) {
   if (!req.auth || !['owner','manager','cashier','waiter'].includes(normalizeRole(req.auth.role_code))) {
@@ -370,7 +372,7 @@ app.use('/api/admin/staff', (req,res,next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   return res.status(423).json({ error:'Administrasi staff sementara read-only selama emergency release POS.', code:'STAFF_ADMIN_READ_ONLY' });
 });
-const ADMIN_ROLES=['owner','manager','cashier','waiter','kitchen','finance'];
+const ADMIN_ROLES=['owner','manager','cashier','waiter','kitchen','finance','inventory'];
 app.get('/api/admin/staff',authenticate,requireOwner,asyncRoute(async(req,res)=>{
   const rows=await adminScoped(req,c=>c.query(`SELECT a.id,a.display_name,a.email,a.phone,a.status,tm.role_code,
     (a.status='active' AND tm.status='active' AND om.status='active') AS is_active,
@@ -591,6 +593,9 @@ app.post('/api/admin/staff/:staffId/credentials',authenticate,requireOwner,async
   if(!result)return res.status(404).json({error:'Staff tidak ditemukan di outlet ini.'});
   res.json({ok:true,credentialsUpdated:true,sessionsRevoked:true});
 }));
+registerInventoryRoutes(app, { authenticate, asyncRoute, scoped, normalizeRole });
+registerManagementRoutes(app, { authenticate, asyncRoute, scoped, normalizeRole });
+
 app.get('/api/menu', authenticate, requireKdsOrPosRole, asyncRoute(async (req,res) => {
   const rows = await scoped(req, c => c.query(`SELECT m.id,m.sku,m.name,m.description,m.destination,m.price,m.cost_price,m.image_url,m.category_id,c.name AS category_name,
       COALESCE(ms.track_stock,false) AS track_stock,ms.quantity AS stock_quantity
@@ -763,6 +768,8 @@ app.post('/api/sessions/:sessionId/orders', authenticate, requirePosRole, asyncR
           [req.auth.tenant_id,req.auth.outlet_id,m.id,row.rows[0].id,-qty,req.auth.staff_id]);
       }
     }
+    const inventorySettings=await loadInventorySettings(c,req.auth.tenant_id);
+    await depleteRecipeIngredients(c,req,inventorySettings,created.map(o=>({orderItemId:o.id,menuItemId:o.menu_item_id,quantity:Number(o.quantity)})));
     await c.query('UPDATE dining_sessions SET version=version+1 WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3',[req.auth.tenant_id,req.auth.outlet_id,req.params.sessionId]);
     const body={batch,items:created};
     await c.query(`INSERT INTO idempotency_keys(tenant_id,outlet_id,key,operation,response_status,response_body,expires_at)
@@ -899,6 +906,7 @@ app.patch('/api/order-batches/:batchId/cancel', authenticate, requireManagerOrOw
     await c.query("UPDATE order_batches SET status='voided' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.batchId]);
     for(const item of items.rows) {
       await c.query("UPDATE order_items SET cooking_status='cancelled' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,item.id]);
+      await restoreRecipeIngredients(c,req,item.id);
       const stock=await c.query('SELECT track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,item.menu_item_id]);
       const sold=await c.query("SELECT 1 FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND reference_type='order_item' AND reference_id=$3 AND movement_type='sale'",[req.auth.tenant_id,req.auth.outlet_id,item.id]);
       if(stock.rowCount&&stock.rows[0].track_stock&&sold.rowCount) {
@@ -929,6 +937,7 @@ app.patch('/api/order-items/:itemId/cancel', authenticate, requireManagerOrOwner
     const pending=await c.query("SELECT id FROM payments WHERE tenant_id=$1 AND outlet_id=$2 AND session_id=$3 AND status='pending' LIMIT 1",[req.auth.tenant_id,req.auth.outlet_id,session.rows[0].id]);
     if(pending.rowCount) return {status:409,body:{error:'Pembayaran masih pending. Void pembayaran terlebih dahulu.',pendingPaymentId:pending.rows[0].id}};
     await c.query("UPDATE order_items SET cooking_status='cancelled' WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3",[req.auth.tenant_id,req.auth.outlet_id,req.params.itemId]);
+    await restoreRecipeIngredients(c,req,req.params.itemId);
     let restored=false;
     const stock=await c.query('SELECT track_stock FROM menu_stock WHERE tenant_id=$1 AND outlet_id=$2 AND menu_item_id=$3 FOR UPDATE',[req.auth.tenant_id,req.auth.outlet_id,item.rows[0].menu_item_id]);
     const sold=await c.query("SELECT 1 FROM menu_stock_movements WHERE tenant_id=$1 AND outlet_id=$2 AND reference_type='order_item' AND reference_id=$3 AND movement_type='sale'",[req.auth.tenant_id,req.auth.outlet_id,item.rows[0].id]);
@@ -1021,6 +1030,7 @@ app.get('*', (req, res, next) => {
 });
 
 app.use((err, _req, res, _next) => {
+  if (err instanceof HttpError) return res.status(err.httpStatus).json(err.body);
   console.error('[api]', err.message, err.stack);
   res.status(500).json({ error: err.message || 'Terjadi kesalahan server.', detail: err.detail || null });
 });

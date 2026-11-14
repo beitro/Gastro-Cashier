@@ -56,6 +56,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
         run: node --input-type=module -e "import {readFile} from 'node:fs/promises'; import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const sql=await readFile('db/migrations/006_menu_stock_and_payment_settlement.sql','utf8'); await c.query(sql); await c.query(sql); await c.end();"
+      - name: Verify inventory management migration is repeatable
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test
+        run: node --input-type=module -e "import {readFile} from 'node:fs/promises'; import pg from 'pg'; const c=new pg.Client({connectionString:process.env.DATABASE_URL}); await c.connect(); const sql=await readFile('db/migrations/008_inventory_management.sql','utf8'); await c.query(sql); await c.query(sql); await c.end();"
       - name: Provision ephemeral CI signing key
         env:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gastro_test

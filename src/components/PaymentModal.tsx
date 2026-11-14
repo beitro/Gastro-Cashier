@@ -138,10 +138,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       setManagerApprovedInfo({ approved: true, managerName: data.managerName || 'Manager', managerId: data.managerId || 'mgr-approved' } as any);
       setShowManagerPinModal(false);
       setManagerPin('');
-      sounds.playSuccessSound?.();
+      sounds.playBellSound?.();
     } catch (err: any) {
       setManagerError(err.message || 'Gagal memverifikasi PIN Manager.');
-      sounds.playAlertSound?.();
+      sounds.playTapSound?.();
     } finally {
       setIsVerifyingManager(false);
     }

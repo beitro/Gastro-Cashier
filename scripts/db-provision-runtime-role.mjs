@@ -38,7 +38,13 @@ try {
     `GRANT UPDATE ON dining_sessions,order_batches,order_items,payments,menu_stock,auth_rate_limits TO ${ident(roleName)}`,
     `GRANT UPDATE (revoked_at) ON staff_sessions TO ${ident(roleName)}`,
     `GRANT INSERT ON auth_rate_limits TO ${ident(roleName)}`,
-    `GRANT SELECT ON auth_rate_limits TO ${ident(roleName)}`
+    `GRANT SELECT ON auth_rate_limits TO ${ident(roleName)}`,
+    // Inventory management (migration 008): items/suppliers/lots are mutable; ledgers and receipts are append-only.
+    `GRANT SELECT ON inventory_items,inventory_movements,inventory_receipts,inventory_lots,inventory_lot_consumptions,suppliers,stock_takes,stock_take_lines,recipes,recipe_lines TO ${ident(roleName)}`,
+    `GRANT INSERT,UPDATE ON inventory_items,suppliers,inventory_lots,stock_takes,menu_items,menu_categories,recipes,tenant_settings,outlet_settings,menu_stock TO ${ident(roleName)}`,
+    `GRANT INSERT ON inventory_movements,inventory_receipts,stock_take_lines,inventory_lot_consumptions,recipe_lines TO ${ident(roleName)}`,
+    `GRANT UPDATE (restored_at) ON inventory_lot_consumptions TO ${ident(roleName)}`,
+    `GRANT DELETE ON recipe_lines TO ${ident(roleName)}`
   ];
   for (const sql of grants) await client.query(sql);
   const result=await client.query('SELECT rolname,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolinherit,rolreplication FROM pg_roles WHERE rolname=$1',[roleName]);

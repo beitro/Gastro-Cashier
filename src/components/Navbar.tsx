@@ -15,12 +15,27 @@ import {
   Crown,
   Lock,
   UserCog,
+  PackagePlus,
+  UtensilsCrossed,
+  Settings,
 } from 'lucide-react';
-import { PaymentFlowMode, Table, StaffAccount } from '../types/pos';
+import { PaymentFlowMode, Table, StaffAccount, UserRole } from '../types/pos';
 import { downloadFigmaWireframe } from '../utils/figmaWireframe';
 import { sounds } from '../utils/soundEffects';
 
-export type NavTabId = 'floor' | 'checker' | 'printer' | 'sales' | 'kds' | 'inventory' | 'owner' | 'finance' | 'admin';
+export type NavTabId =
+  | 'floor'
+  | 'checker'
+  | 'printer'
+  | 'sales'
+  | 'kds'
+  | 'inventory'
+  | 'warehouse'
+  | 'menu_admin'
+  | 'settings'
+  | 'owner'
+  | 'finance'
+  | 'admin';
 
 interface NavbarProps {
   tables: Table[];
@@ -92,7 +107,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     icon: React.ReactNode;
     badge?: number;
     alert?: boolean;
-    roles: ('owner' | 'manager' | 'cashier' | 'waiter' | 'kitchen' | 'finance')[];
+    roles: UserRole[];
   }[] = [
     {
       id: 'owner',
@@ -128,12 +143,32 @@ export const Navbar: React.FC<NavbarProps> = ({
       roles: ['owner', 'manager', 'cashier', 'waiter'],
     },
     {
+      id: 'warehouse',
+      label: 'Gudang & Stok',
+      icon: <PackagePlus className="w-4 h-4 stroke-[2]" />,
+      badge: lowStockAlertCount > 0 ? lowStockAlertCount : undefined,
+      alert: lowStockAlertCount > 0,
+      roles: ['owner', 'manager', 'inventory', 'finance'],
+    },
+    {
+      id: 'menu_admin',
+      label: 'Input Menu & BOM',
+      icon: <UtensilsCrossed className="w-4 h-4 stroke-[2]" />,
+      roles: ['owner', 'manager'],
+    },
+    {
+      id: 'settings',
+      label: 'App Settings',
+      icon: <Settings className="w-4 h-4 stroke-[2]" />,
+      roles: ['owner', 'manager'],
+    },
+    {
       id: 'inventory',
       label: 'Stok Menu',
       icon: <Boxes className="w-4 h-4 stroke-[2]" />,
       badge: lowStockAlertCount > 0 ? lowStockAlertCount : undefined,
       alert: lowStockAlertCount > 0,
-      roles: ['owner', 'manager', 'finance', 'cashier', 'waiter'],
+      roles: ['owner', 'manager', 'inventory', 'finance', 'cashier', 'waiter'],
     },
     {
       id: 'printer',

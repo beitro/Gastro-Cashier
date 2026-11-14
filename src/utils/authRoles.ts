@@ -28,6 +28,24 @@ export const DEFAULT_STAFF_ACCOUNTS: StaffAccount[] = [
     avatarColor: 'bg-indigo-600',
     roleLabel: 'Finance & Tax PB1',
   },
+  {
+    id: 'staff-manager-01',
+    name: 'Arif Santoso',
+    role: 'manager',
+    pin: '8888',
+    nfcTagUid: 'NFC-MANAGER-88',
+    avatarColor: 'bg-violet-600',
+    roleLabel: 'Outlet Manager',
+  },
+  {
+    id: 'staff-inventory-01',
+    name: 'Dimas Gudang',
+    role: 'inventory',
+    pin: '4321',
+    nfcTagUid: 'NFC-INVENTORY-43',
+    avatarColor: 'bg-teal-600',
+    roleLabel: 'Staff Inventory / Gudang',
+  },
 ];
 
 export function getRoleLabel(role: UserRole): string {
@@ -44,6 +62,8 @@ export function getRoleLabel(role: UserRole): string {
       return 'Kitchen & Bar KDS';
     case 'finance':
       return 'Finance & Tax PB1';
+    case 'inventory':
+      return 'Staff Inventory / Gudang';
     default:
       return role;
   }
@@ -63,6 +83,8 @@ export function getRoleAvatarColor(role: UserRole): string {
       return 'bg-orange-600';
     case 'finance':
       return 'bg-indigo-600';
+    case 'inventory':
+      return 'bg-teal-600';
     default:
       return 'bg-slate-600';
   }
@@ -137,7 +159,11 @@ export interface RolePermissions {
   canAccessKds: boolean;
   canAccessChecker: boolean;
   canAccessInventory: boolean;
-  /** Hanya owner yang dapat menyetujui pembatalan dan pengembalian stok. */
+  canInputInventory: boolean;
+  canAdminInventory: boolean;
+  canManageMenu: boolean;
+  canManageSettings: boolean;
+  /** Hanya owner atau manager yang dapat menyetujui pembatalan dan pengembalian stok. */
   canApproveCancellation: boolean;
   canAccessFinance: boolean;
   canAccessOwnerDashboard: boolean;
@@ -156,6 +182,10 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canAccessKds: true,
         canAccessChecker: true,
         canAccessInventory: true,
+        canInputInventory: true,
+        canAdminInventory: true,
+        canManageMenu: true,
+        canManageSettings: true,
         canApproveCancellation: true,
         canAccessFinance: true,
         canAccessOwnerDashboard: true,
@@ -168,7 +198,27 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canAccessKds: true,
         canAccessChecker: true,
         canAccessInventory: true,
+        canInputInventory: true,
+        canAdminInventory: true,
+        canManageMenu: true,
+        canManageSettings: true,
         canApproveCancellation: true,
+        canAccessFinance: false,
+        canAccessOwnerDashboard: false,
+        canManagePettyCash: false,
+        canResetDemo: false,
+      };
+    case 'inventory':
+      return {
+        canOperatePOS: false,
+        canAccessKds: false,
+        canAccessChecker: false,
+        canAccessInventory: true,
+        canInputInventory: true,
+        canAdminInventory: false,
+        canManageMenu: false,
+        canManageSettings: false,
+        canApproveCancellation: false,
         canAccessFinance: false,
         canAccessOwnerDashboard: false,
         canManagePettyCash: false,
@@ -180,6 +230,10 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canAccessKds: false,
         canAccessChecker: false,
         canAccessInventory: true,
+        canInputInventory: false,
+        canAdminInventory: false,
+        canManageMenu: false,
+        canManageSettings: false,
         canApproveCancellation: false,
         canAccessFinance: true,
         canAccessOwnerDashboard: false,
@@ -192,6 +246,10 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canAccessKds: true,
         canAccessChecker: false,
         canAccessInventory: false,
+        canInputInventory: false,
+        canAdminInventory: false,
+        canManageMenu: false,
+        canManageSettings: false,
         canApproveCancellation: false,
         canAccessFinance: false,
         canAccessOwnerDashboard: false,
@@ -206,6 +264,10 @@ export function getRolePermissions(role: UserRole): RolePermissions {
         canAccessKds: true,
         canAccessChecker: true,
         canAccessInventory: true, // view stock + request cancellation
+        canInputInventory: false,
+        canAdminInventory: false,
+        canManageMenu: false,
+        canManageSettings: false,
         canApproveCancellation: false,
         canAccessFinance: false,
         canAccessOwnerDashboard: false,

@@ -30,6 +30,7 @@ type Tab = 'staff' | 'matrix';
 
 const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
   { value: 'manager', label: 'Manager (Outlet Manager)' },
+  { value: 'inventory', label: 'Staff Inventory (Gudang & Stok)' },
   { value: 'cashier', label: 'Cashier (Kasir POS)' },
   { value: 'waiter', label: 'Waiter (Pelayan / Checker)' },
   { value: 'kitchen', label: 'Kitchen (Dapur & Bar KDS)' },
@@ -38,17 +39,21 @@ const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
 ];
 
 const matrix = [
-  ['Cockpit Owner', '✓', '—', '—', '—', '—', '—'],
-  ['POS & Floor Plan', '✓', '✓', '✓', '✓', '—', '—'],
-  ['KDS & Checker', '✓', '✓', '✓', '✓', '✓', '—'],
-  ['Stok Menu', '✓', '✓', '✓', '✓', '—', '✓'],
-  ['Pembayaran / Settlement', '✓', '✓', '✓', '—', '—', '✓'],
-  ['Pembukuan & PB1', '✓', '—', '—', '—', '—', '✓'],
-  ['Kas Kecil', '✓', '—', '—', '—', '—', '✓'],
-  ['Approval pembatalan', '✓', '✓', '—', '—', '—', '—'],
-  ['Tambah karyawan & role', '✓', '—', '—', '—', '—', '—'],
-  ['Set / ubah PIN karyawan', '✓', '—', '—', '—', '—', '—'],
-  ['Blokir / buka blokir akun & cabut sesi', '✓', '—', '—', '—', '—', '—'],
+  ['Cockpit Owner', '✓', '—', '—', '—', '—', '—', '—'],
+  ['POS & Floor Plan', '✓', '✓', '—', '✓', '✓', '—', '—'],
+  ['KDS & Checker', '✓', '✓', '—', '✓', '✓', '✓', '—'],
+  ['Input Stok & Penerimaan (Qty + Value)', '✓', '✓', '✓', '—', '—', '—', '—'],
+  ['Admin Inventory & Approval Opname', '✓', '✓', '—', '—', '—', '—', '—'],
+  ['Manajemen Menu & Resep BOM', '✓', '✓', '—', '—', '—', '—', '—'],
+  ['Pengaturan Sistem (App Settings)', '✓', '✓', '—', '—', '—', '—', '—'],
+  ['Stok Menu', '✓', '✓', '✓', '✓', '✓', '—', '✓'],
+  ['Pembayaran / Settlement', '✓', '✓', '—', '✓', '—', '—', '✓'],
+  ['Pembukuan & PB1', '✓', '—', '—', '—', '—', '—', '✓'],
+  ['Kas Kecil', '✓', '—', '—', '—', '—', '—', '✓'],
+  ['Approval pembatalan', '✓', '✓', '—', '—', '—', '—', '—'],
+  ['Tambah karyawan & role', '✓', '—', '—', '—', '—', '—', '—'],
+  ['Set / ubah PIN karyawan', '✓', '—', '—', '—', '—', '—', '—'],
+  ['Blokir / buka blokir akun & cabut sesi', '✓', '—', '—', '—', '—', '—', '—'],
 ];
 
 export interface StaffAdminViewProps {
@@ -741,7 +746,7 @@ export const StaffAdminView: React.FC<StaffAdminViewProps> = ({
         <section className="clay-panel p-4 overflow-x-auto">
           <h3 className="font-black text-slate-900 mb-1">Matrix Hak Akses Role POS</h3>
           <p className="text-xs text-slate-500 mb-4">
-            Hak akses operasional dipisahkan berdasarkan 6 role standar Gastro-Cashier.
+            Hak akses operasional dipisahkan berdasarkan 7 role standar Gastro-Cashier.
           </p>
           <table className="w-full text-sm">
             <thead>
@@ -749,6 +754,7 @@ export const StaffAdminView: React.FC<StaffAdminViewProps> = ({
                 <th className="p-3">Fitur</th>
                 <th className="p-3">Owner</th>
                 <th className="p-3">Manager</th>
+                <th className="p-3">Inventory</th>
                 <th className="p-3">Cashier</th>
                 <th className="p-3">Waiter</th>
                 <th className="p-3">Kitchen</th>

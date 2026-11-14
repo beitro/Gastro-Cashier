@@ -144,12 +144,13 @@ export interface PrintTicket {
   };
 }
 
-export type UserRole = 'owner' | 'manager' | 'cashier' | 'waiter' | 'kitchen' | 'finance';
+export type UserRole = 'owner' | 'manager' | 'cashier' | 'waiter' | 'kitchen' | 'finance' | 'inventory';
 
 export interface StaffAccount {
   id: string;
   name: string;
   role: UserRole;
+  roleCode?: UserRole;
   pin: string;
   nfcTagUid: string;
   avatarColor: string;
