@@ -62,6 +62,7 @@ try {
     'db/migrations/004_signed_rls_context.sql',
     'db/migrations/006_menu_stock_and_payment_settlement.sql',
     'db/migrations/008_inventory_management.sql',
+    'db/migrations/009_inventory_full_capability.sql',
   ];
 
   for (const relPath of orderedMigrations) {

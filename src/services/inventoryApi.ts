@@ -20,6 +20,8 @@ export interface InventoryItem {
   defaultSupplierId: string | null;
   isActive: boolean;
   status: StockStatus;
+  purchaseUnit?: string | null;
+  conversionRatio?: number;
   nextExpiry: string | null;
   updatedAt?: string;
 }
@@ -74,6 +76,8 @@ export interface ReceiptInput {
   invoiceNo?: string;
   receivedAt?: string;
   note?: string;
+  attachmentUrl?: string;
+  attachmentMime?: string;
   lines: ReceiptLineInput[];
 }
 
@@ -88,6 +92,8 @@ export interface ReceiptSummary {
   lineCount: number;
   note: string | null;
   createdBy: string | null;
+  attachmentUrl?: string | null;
+  attachmentMime?: string | null;
 }
 
 export interface StockTakeSummary {
@@ -238,10 +244,12 @@ export const inventoryApi = {
   createItem: (b: {
     name: string; unitCode: string; sku?: string; category?: string; barcode?: string; storageZone?: string;
     reorderLevel?: number; maxLevel?: number | null; openingQuantity?: number; openingUnitCost?: number; defaultSupplierId?: string;
+    purchaseUnit?: string; conversionRatio?: number;
   }) => request<InventoryItem>('/api/inventory/items', { method: 'POST', ...json(b) }),
   updateItem: (id: string, b: Partial<{
     name: string; unitCode: string; sku: string | null; category: string | null; barcode: string | null; storageZone: string | null;
     reorderLevel: number; maxLevel: number | null; isActive: boolean; defaultSupplierId: string | null;
+    purchaseUnit: string | null; conversionRatio: number;
   }>) => request<InventoryItem>('/api/inventory/items/' + id, { method: 'PATCH', ...json(b) }),
   itemMovements: (id: string) => request<InventoryMovement[]>('/api/inventory/items/' + id + '/movements'),
   movements: (p: { type?: MovementType; from?: string; to?: string; limit?: number } = {}) =>

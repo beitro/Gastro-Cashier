@@ -19,6 +19,9 @@ import {
   Truck,
   UtensilsCrossed,
   XCircle,
+  Camera,
+  QrCode,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { MenuItem, RawMaterial, StaffAccount } from '../types/pos';
 import { getApiToken } from '../services/posApi';
@@ -439,9 +442,25 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
   const [rcSupplierId, setRcSupplierId] = useState<string>('');
   const [rcInvoiceNo, setRcInvoiceNo] = useState<string>('');
   const [rcNote, setRcNote] = useState<string>('');
+  const [rcAttachmentUrl, setRcAttachmentUrl] = useState<string>('');
   const [rcRows, setRcRows] = useState<DraftReceiptRow[]>(() => [
     createEmptyReceiptRow(items[0]?.id || ''),
   ]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+      notify('err', 'Ukuran gambar maksimal 4 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setRcAttachmentUrl(event.target?.result as string);
+      notify('ok', `Foto nota berhasil dilampirkan (${(file.size / 1024).toFixed(0)} KB).`);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const updateReceiptRow = (rowId: string, patch: Partial<DraftReceiptRow>) => {
     setRcRows((prev) =>
@@ -540,6 +559,8 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
           supplierId: rcSupplierId || undefined,
           invoiceNo: rcInvoiceNo.trim() || undefined,
           note: rcNote.trim() || undefined,
+          attachmentUrl: rcAttachmentUrl || undefined,
+          attachmentMime: rcAttachmentUrl.startsWith('data:image/') ? rcAttachmentUrl.split(';')[0].replace('data:', '') : undefined,
           lines,
         });
         notify(
@@ -630,6 +651,7 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
       }
       setRcInvoiceNo('');
       setRcNote('');
+      setRcAttachmentUrl('');
       setRcRows([createEmptyReceiptRow(items[0]?.id || '')]);
     } catch (err: any) {
       notify('err', err?.message || 'Gagal menyimpan penerimaan barang.');
@@ -935,7 +957,10 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
   const [newItemForm, setNewItemForm] = useState({
     name: '',
     sku: '',
+    barcode: '',
     unitCode: 'kg',
+    purchaseUnit: '',
+    conversionRatio: '1',
     storageZone: 'Dry Storage',
     reorderLevel: '5',
     maxLevel: '50',
@@ -980,7 +1005,10 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
         const created = await inventoryApi.createItem({
           name,
           sku: newItemForm.sku.trim() || undefined,
+          barcode: newItemForm.barcode.trim() || undefined,
           unitCode: newItemForm.unitCode,
+          purchaseUnit: newItemForm.purchaseUnit.trim() || undefined,
+          conversionRatio: parseFloat(newItemForm.conversionRatio) || 1,
           storageZone: newItemForm.storageZone,
           category: newItemForm.storageZone,
           reorderLevel: reorder,
@@ -996,8 +1024,10 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
           sku: newItemForm.sku.trim() || `SKU-${items.length + 1}`,
           name,
           unitCode: newItemForm.unitCode,
+          purchaseUnit: newItemForm.purchaseUnit.trim() || null,
+          conversionRatio: parseFloat(newItemForm.conversionRatio) || 1,
           category: newItemForm.storageZone,
-          barcode: null,
+          barcode: newItemForm.barcode.trim() || null,
           storageZone: newItemForm.storageZone,
           currentQuantity: openQty,
           reorderLevel: reorder,
@@ -1017,7 +1047,10 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
       setNewItemForm({
         name: '',
         sku: '',
+        barcode: '',
         unitCode: 'kg',
+        purchaseUnit: '',
+        conversionRatio: '1',
         storageZone: 'Dry Storage',
         reorderLevel: '5',
         maxLevel: '50',
@@ -1716,6 +1749,40 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
                 </div>
               </div>
 
+              {/* Upload Bukti Nota / Foto Faktur */}
+              <div className="clay-card-sm p-3 flex flex-wrap items-center justify-between gap-3 bg-amber-50/40 border border-amber-200/60">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0">
+                    <Camera className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-black text-slate-800">Lampirkan Bukti Foto Nota / Bon Fisik</div>
+                    <div className="text-[11px] font-semibold text-slate-500">Membantu verifikasi dan audit oleh Owner / Manajer</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {rcAttachmentUrl ? (
+                    <div className="flex items-center gap-2">
+                      <img src={rcAttachmentUrl} alt="Preview Nota" className="w-10 h-10 object-cover rounded-md border border-slate-300" />
+                      <button
+                        type="button"
+                        onClick={() => setRcAttachmentUrl('')}
+                        className="text-[11px] font-bold text-rose-600 hover:underline"
+                      >
+                        Hapus Foto
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="clay-btn-neutral px-3 py-1.5 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer">
+                      <ImageIcon className="w-3.5 h-3.5 text-slate-600" />
+                      <span>Pilih / Foto Nota</span>
+                      <input type="file" accept="image/*" capture="environment" onChange={handleFileUpload} className="hidden" />
+                    </label>
+                  )}
+                </div>
+              </div>
+
               {/* Multi-line receipt rows */}
               <div className="space-y-3">
                 {rcRows.map((row, idx) => {
@@ -1910,7 +1977,22 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
                           <td className="py-2.5 px-3 font-black text-emerald-800">
                             {formatRupiah(r.totalValue)}
                           </td>
-                          <td className="py-2.5 px-3 text-slate-600">{r.createdBy || 'Staff'}</td>
+                          <td className="py-2.5 px-3 text-slate-600">
+                            <div className="flex items-center gap-1.5">
+                              <span>{r.createdBy || 'Staff'}</span>
+                              {r.attachmentUrl && (
+                                <a
+                                  href={r.attachmentUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="Lihat Foto Bukti Nota"
+                                  className="text-amber-700 hover:text-amber-900 underline text-[10px] font-black"
+                                >
+                                  [Foto Nota]
+                                </a>
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -3290,11 +3372,24 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-xs font-extrabold mb-1">Satuan Ukur</label>
+                <label className="block text-xs font-extrabold mb-1">Barcode / EAN</label>
+                <input
+                  type="text"
+                  value={newItemForm.barcode}
+                  onChange={(e) => setNewItemForm((p) => ({ ...p, barcode: e.target.value }))}
+                  placeholder="Contoh: 8991234567890"
+                  className="w-full clay-input px-3 py-2 text-xs font-bold"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-xs font-extrabold mb-1">Satuan Resep</label>
                 <select
                   value={newItemForm.unitCode}
                   onChange={(e) => setNewItemForm((p) => ({ ...p, unitCode: e.target.value }))}
-                  className="w-full clay-input px-3 py-2 text-xs font-bold"
+                  className="w-full clay-input px-2.5 py-2 text-xs font-bold"
                 >
                   {DEFAULT_UNITS.map((u) => (
                     <option key={u} value={u}>
@@ -3302,6 +3397,28 @@ export const InventoryWorkspaceView: React.FC<InventoryWorkspaceViewProps> = ({
                     </option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs font-extrabold mb-1">Satuan Beli (UoM)</label>
+                <input
+                  type="text"
+                  value={newItemForm.purchaseUnit}
+                  onChange={(e) => setNewItemForm((p) => ({ ...p, purchaseUnit: e.target.value }))}
+                  placeholder="Dus / Sak / Jerigen"
+                  className="w-full clay-input px-2.5 py-2 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-extrabold mb-1">Rasio Konversi</label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0.0001"
+                  value={newItemForm.conversionRatio}
+                  onChange={(e) => setNewItemForm((p) => ({ ...p, conversionRatio: e.target.value }))}
+                  placeholder="1"
+                  className="w-full clay-input px-2.5 py-2 text-xs font-bold"
+                />
               </div>
             </div>
 

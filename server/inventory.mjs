@@ -50,6 +50,7 @@ function mapItem(r) {
     storageZone: r.storage_zone, currentQuantity: qty, reorderLevel: reorder, maxLevel: max,
     averageUnitCost: avg, lastPurchaseCost: num(r.last_purchase_cost), stockValue: round(qty * avg, 2),
     defaultSupplierId: r.default_supplier_id, isActive: r.is_active, status,
+    purchaseUnit: r.purchase_unit || null, conversionRatio: r.conversion_ratio ? num(r.conversion_ratio) : 1,
     nextExpiry: r.next_expiry || null, updatedAt: r.updated_at,
   };
 }
@@ -228,9 +229,9 @@ export function registerInventoryRoutes(app, { authenticate, asyncRoute, scoped,
       const settings = await loadInventorySettings(c, req.auth.tenant_id);
       if (roleOf(req) === 'inventory' && !settings.staffCanCreateItems) throw new HttpError(403, { error: 'Pembuatan bahan baru dibatasi Manager/Owner oleh pengaturan sistem.' });
       if (openQty > 0 && !['owner', 'manager'].includes(roleOf(req))) throw new HttpError(403, { error: 'Stok awal hanya dapat diinput Manager/Owner; gunakan Penerimaan Barang.' });
-      const item = (await c.query(`INSERT INTO inventory_items(tenant_id,outlet_id,sku,name,unit_code,category,barcode,storage_zone,reorder_level,max_level,default_supplier_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.auth.tenant_id, req.auth.outlet_id, cleanText(b.sku, 48), name, unit, cleanText(b.category, 48), cleanText(b.barcode, 64), cleanText(b.storageZone, 48), reorder, max, b.defaultSupplierId || null])).rows[0];
+      const item = (await c.query(`INSERT INTO inventory_items(tenant_id,outlet_id,sku,name,unit_code,category,barcode,storage_zone,reorder_level,max_level,default_supplier_id,purchase_unit,conversion_ratio)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [req.auth.tenant_id, req.auth.outlet_id, cleanText(b.sku, 48), name, unit, cleanText(b.category, 48), cleanText(b.barcode, 64), cleanText(b.storageZone, 48), reorder, max, b.defaultSupplierId || null, cleanText(b.purchaseUnit, 32), b.conversionRatio ? Number(b.conversionRatio) : 1.0])).rows[0];
       if (openQty > 0) {
         await postMovement(c, req, item, { type: 'opening', delta: openQty, unitCost: openCost, referenceType: 'opening', referenceId: item.id, note: 'Stok awal', allowNegative: false });
       }
@@ -255,6 +256,12 @@ export function registerInventoryRoutes(app, { authenticate, asyncRoute, scoped,
     if (b.isActive !== undefined) { if (typeof b.isActive !== 'boolean') return res.status(400).json({ error: 'isActive harus boolean.' }); push('is_active', b.isActive); }
     if (b.defaultSupplierId !== undefined) { if (b.defaultSupplierId !== null && !isUuid(b.defaultSupplierId)) return res.status(400).json({ error: 'Supplier tidak valid.' }); push('default_supplier_id', b.defaultSupplierId); }
     if (b.unitCode !== undefined) push('unit_code', cleanText(b.unitCode, 20));
+    if (b.purchaseUnit !== undefined) push('purchase_unit', cleanText(b.purchaseUnit, 32));
+    if (b.conversionRatio !== undefined) {
+      const cr = Number(b.conversionRatio);
+      if (!Number.isFinite(cr) || cr <= 0) return res.status(400).json({ error: 'Rasio konversi harus angka positif.' });
+      push('conversion_ratio', cr);
+    }
     if (!sets.length) return res.status(400).json({ error: 'Tidak ada perubahan.' });
     const item = await scoped(req, async (c) => {
       const cur = await c.query('SELECT * FROM inventory_items WHERE tenant_id=$1 AND outlet_id=$2 AND id=$3 FOR UPDATE', [req.auth.tenant_id, req.auth.outlet_id, req.params.itemId]);
@@ -329,9 +336,9 @@ export function registerInventoryRoutes(app, { authenticate, asyncRoute, scoped,
         if (!s.rowCount) throw new HttpError(404, { error: 'Supplier tidak ditemukan atau nonaktif.' });
       }
       const items = await lockItems(c, req, lines.map((l) => l.itemId));
-      const receipt = (await c.query(`INSERT INTO inventory_receipts(tenant_id,outlet_id,receipt_number,supplier_id,invoice_no,received_at,note,idempotency_key,created_by_staff_id)
-        VALUES($1,$2,$3,$4,$5,COALESCE($6,now()),$7,$8,$9) RETURNING *`,
-      [req.auth.tenant_id, req.auth.outlet_id, docNumber('GR'), b.supplierId || null, cleanText(b.invoiceNo, 64), receivedAt, cleanText(b.note, 500), b.idempotencyKey, req.auth.staff_id])).rows[0];
+      const receipt = (await c.query(`INSERT INTO inventory_receipts(tenant_id,outlet_id,receipt_number,supplier_id,invoice_no,received_at,note,idempotency_key,created_by_staff_id,attachment_url,attachment_mime)
+        VALUES($1,$2,$3,$4,$5,COALESCE($6,now()),$7,$8,$9,$10,$11) RETURNING *`,
+      [req.auth.tenant_id, req.auth.outlet_id, docNumber('GR'), b.supplierId || null, cleanText(b.invoiceNo, 64), receivedAt, cleanText(b.note, 500), b.idempotencyKey, req.auth.staff_id, cleanText(b.attachmentUrl, 1000000), cleanText(b.attachmentMime, 64)])).rows[0];
       let total = 0;
       const posted = [];
       for (const l of lines) {
@@ -357,7 +364,7 @@ export function registerInventoryRoutes(app, { authenticate, asyncRoute, scoped,
       FROM inventory_receipts r LEFT JOIN suppliers s ON s.tenant_id=r.tenant_id AND s.outlet_id=r.outlet_id AND s.id=r.supplier_id
       LEFT JOIN staff_accounts a ON a.id=r.created_by_staff_id
       WHERE r.tenant_id=$1 AND r.outlet_id=$2 ORDER BY r.received_at DESC,r.created_at DESC LIMIT 100`, [req.auth.tenant_id, req.auth.outlet_id]));
-    res.json(rows.rows.map((r) => ({ id: r.id, receiptNumber: r.receipt_number, supplierId: r.supplier_id, supplierName: r.supplier_name, invoiceNo: r.invoice_no, receivedAt: r.received_at, totalValue: num(r.total_value), lineCount: r.line_count, note: r.note, createdBy: r.created_by_name })));
+    res.json(rows.rows.map((r) => ({ id: r.id, receiptNumber: r.receipt_number, supplierId: r.supplier_id, supplierName: r.supplier_name, invoiceNo: r.invoice_no, receivedAt: r.received_at, totalValue: num(r.total_value), lineCount: r.line_count, note: r.note, createdBy: r.created_by_name, attachmentUrl: r.attachment_url || null, attachmentMime: r.attachment_mime || null })));
   }));
 
   // Waste / spoilage: reason is mandatory and the item cost is valued at current weighted average -------
